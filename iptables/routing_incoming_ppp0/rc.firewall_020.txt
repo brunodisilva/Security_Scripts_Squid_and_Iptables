@@ -1,0 +1,46 @@
+# http://www.wtf.dk/files/linux/netfilter.firewall
+#
+
+#!/bin/bash
+
+# Load required modules   
+insmod ip_tables
+insmod ip_conntrack
+insmod iptable_nat
+insmod ipt_MASQUERADE
+
+# Then flush all rules
+iptables -F
+iptables -t nat -F
+
+# In the NAT table (-t nat), Append a rule (-A) after routing
+# (POSTROUTING) for all packets going out ppp0 (-o ppp0) which says to
+# MASQUERADE the connection (-j MASQUERADE).
+
+#iptables -t nat -A POSTROUTING -o ppp0 -j MASQUERADE
+
+# Below means 'route 192.168.1.x'
+iptables -t nat -A POSTROUTING -d ! 192.168.1.0/24 -j MASQUERADE
+
+iptables -A FORWARD -s 192.168.1.0/24 -j ACCEPT
+iptables -A FORWARD -d 192.168.1.0/24 -j ACCEPT
+iptables -A FORWARD -s ! 192.168.1.0/24 -j DROP
+
+# Disallow NEW and INVALID incoming or forwarded packets from ppp0.
+#iptables -A INPUT -i ppp0 -m state --state NEW,INVALID -j DROP
+#iptables -A FORWARD -i ppp0 -m state --state NEW,INVALID -j DROP
+
+# port 113 is evil ;)
+iptables -A INPUT --protocol udp --source-port 113 -j DROP
+iptables -A INPUT --protocol udp --destination-port 113 -j DROP
+
+# Turn on IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+#iptables -A INPUT --protocol udp --source-port 113 -j DROP
+
+# Route incoming ppp0 at port 80, to 192.168.1.18:80
+iptables -A PREROUTING -t nat -p tcp -i ppp0 --dport 80 -j DNAT --to 192.168.1.18:80
+
+# Route incoming ppp0 at port 21, to 192.168.1.18:21
+iptables -A PREROUTING -t nat -p tcp -i ppp0 --dport 21 -j DNAT --to 192.168.1.18:21

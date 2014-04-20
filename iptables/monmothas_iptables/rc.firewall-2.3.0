@@ -1,0 +1,465 @@
+#!/bin/sh
+# ----------------------------------------------------------------------|
+#	      Here it is...MonMotha's Firewall 2.3.0!			|
+#	  Once again, my crude ASCII art best viewed with pico.		|
+# ----------------------------------------------------------------------|
+# 2.3 RELEASE NOTES: This is the 2.1 series with some extra stuff,	|
+# including MAC address matching, stateful matching, port forwarding,	|
+# per-proto accept behavior, and some other stuff that I might think	|
+# about adding later.							|
+# ----------------------------------------------------------------------|
+# COMMENTS from MonMotha, Steff, and LaptopZZ:				|
+#									|
+# Please...PLEASE give me feedback on your experiences with this script	|
+# I would really like to know what everyone wants, what works, and	|
+# about the inevitable bugs present in anything.			|
+#									|
+# 		Direct all feedback to: bvmopen@usa.net			|
+# 						--MonMotha		|
+# ----------------------------------------------------------------------|
+# SYSTEM REQUIREMENTS: You must have either compiled the appropriate	|
+# iptables support into your 2.4 kernel or have loaded all the		|
+# applicable modules BEFORE you run this script.  This script assumes	|
+# that you have everything compiled into your kernel.			|
+#									|
+# I'll get you a list of required kernel options as I play with the	|
+# 2.4 kernel series more.						|
+# 									|
+# You need iptables.  Get it at "http://netfilter.filewatcher.org".	|
+#									|
+# This script was written (and partially tested) with iptables 1.1.2	|
+# and kernel 2.4.0-test9/10 in mind.					|
+# 									|
+# Also, this is a BASH shell script...any 2.x version of GNU BASH	|
+# should work.								|
+#									|
+# For port forwarding you also need sed, the stream editor.		|
+# ----------------------------------------------------------------------|
+# IMPORTANT: This firewall is currently in beta! It may be too		|
+# restrictive or insecure.						|
+# ----------------------------------------------------------------------|
+# CHANGELOG: (Since 2.3.0-pre1a only)					|
+#	version 2.3.0: No changes from pre1g				|
+#	version 2.3.0-pre1g: Tuned down default TCP allows		|
+#			     Restructure to SSH loop			|
+#			     Status Reporting Fixes (newlines, etc.)	|
+#			     Fix log prefix length on accept loops	|
+#	version 2.3.0-pre1f: Moved the ICMP echo-request limit to where	|
+#				it should have been			|
+#			     Allows the rest of the ICMP like it should	|
+#			     Remove the interface matching from ICMP	|
+#				echo-request (not needed)		|
+#	version 2.3.0-pre1e: Fixed an issue in the invalid matching	|
+#	version 2.3.0-pre1d: Spiffed up comments			|
+#			     Port Forwarding				|
+#			     Moved the deny setting to normal options	|
+#	version 2.3.0-pre1c: Minor fixes that don't (currently) affect	|
+#				functionality				|
+#	version 2.3.0-pre1b: Security fix documented in 2.1.13		|
+#			     Slight logic change in TCP_ALLOW loop	|
+#			     Don't print allow messages if nothign is	|
+#				allowed by that loop			|
+#			     Changed IPTables download URL		|
+#       version 2.3.0-pre1a: Initial branch from 2.1.12                 |
+#                            Add stuff in release notes except port fw  |
+# ----------------------------------------------------------------------|
+# USE AT YOUR OWN RISK! THIS IS WITHOUT ANY WARRANTY STATED OR IMPLIED!	|
+# That means NONE whatsoever, not even fitfullness for purpose!		|
+# ----------------------------------------------------------------------|
+# You NEED to set this!							|
+# Configuration follows:						|
+#									|
+# Notes about configuration: 						|
+# Some things take more than one option,separate with spaces.		|
+# You probably don't want all the ports I have under here open, portscan|
+#	yourself to find what you want open.				|
+# For SSH you need port 22 in TCP_ALLOW, and set the appropriate SSH	|
+#	system(s) to "TRUE".						|
+# If you want to used host-based identd allowing, do NOT put 113 in	|
+#	TCP_ALLOW and DO set AUTH_ALLOW, if you want to NOT use		|
+#	host-based identd allowing, leave AUTH_ALLOW empty and put	|
+#	113 in TCP_ALLOW below. Putting 113 in TCP_ALLOW will cause a	|
+#	global allow to be put in place (anyone can connect to it).	|
+# MAC_LAN is ONLY used to the purposes of masquerading and it will	|
+#	override the INTERNAL_LAN setting for masquerading. However,	|
+#	INTERNAL_LAN must still be properly defined for other things!	|
+# Do not put 53 in UDPALLOW, set DNS to your DNS servers. This is ONLY	|
+#	needed for ZONE TRANSFERS!					|
+
+IPTABLES="/usr/local/bin/iptables"	# set to your iptables location, must be set
+DNS=""	#set to your DNS server(s), that you get zone transfers from
+TCP_ALLOW="22 25 80 110 443 3333 6667" #TCP ports to ALLOW
+UDP_ALLOW="6112 6119 4000"		# UDP ports to ALLOW (53 not needed, covered by DNS above)
+INET_IFACE="ppp0"			# the interface your internet's on (one only), must be set
+LAN_IFACE="eth0"			# the interface(s) your LAN's on (currently used only as a sanity check)
+USE_SSH1="TRUE"				# set to TRUE if you use "real" SSH1 (anything else is interpreted as FALSE)
+USE_OPENSSH="FALSE"			# set to TRUE if you use OpenSSH (anything else is interpreted as FALSE)
+INTERNAL_LAN="192.168.0.0/24 192.168.1.0/24"	#the internal network(s), must be set
+AUTH_ALLOW="207.69.200.132 216.32.132.250 206.132.27.156 209.81.232.66 207.45.69.69 216.80.83.185 212.158.123.66"	#IPs allowed to use the AUTH service (leave blank and put 113 in TCP_ALLOW for all)
+DENY_ALL=""				# Internet hosts to explicitly deny from accessing your system at all
+DROP="REJECT"				# What to do with packets we don't want: DROP, REJECT, LDROP (log and drop), or LREJECT (log and reject)
+
+# Below here is experimental
+MAC_LAN=""				# MAC addresses permitted to use masquerading, leave blank to not use
+USE_MASQ="TRUE"				# Set to TRUE to use masquerading (anything else is interpreted as FALSE)
+USE_SNAT=""				# If you have a static internet IP, put it here and set "USE_MASQ" above to FALSE
+TCP_FW=""				# TCP port forwards (will pick reverse masquerading if you use masquerading or snat), form is "SPORT:DPORT>IP"
+UDP_FW=""				# Same as above but on UDP
+
+# ----------------------------------------------------------------------|
+# Do not modify configuration below here				|
+# ----------------------------------------------------------------------|
+DROP="REJECT" #Apparently some ISPs (@home comes to mind) have problems with denying them, so send back ICMP messages to fool them
+FILTER_CHAINS="INETIN INETOUT LDROP LREJECT TCPACCEPT UDPACCEPT"
+# ----------------------------------------------------------------------|
+# You shouldn't need to modify anything below here			|
+# ----------------------------------------------------------------------|
+
+# Let's load it!
+echo "Loading iptables firewall:"
+
+# Configuration Sanity Checks
+echo -n "Checking configuration..."
+if [ "$USE_MASQ" = "TRUE" ] && ! [ "$USE_SNAT" = "" ] ; then
+	echo
+	echo "ERROR IN CONFIGURATION: Masquerading and Static NAT cannot both be used!"
+	exit 1
+fi
+if  [ "$INET_IFACE" = "$LAN_IFACE" ] ; then
+        if  [  "$USE_MASQ" = "TRUE" ] || [ "$USE_SNAT" != "" ] ; then
+		# This can't happen because the whole point of my masquerading code is that we don't need to know the IP.
+		# While we know the IP with SNAT, I'm too lazy do change my code other than to use SNAT :)
+		echo
+		echo "ERROR IN CONFIGURATION: INET interface and LAN interface cannot be the same when using masquerading or SNAT!"
+		exit 1
+	fi
+fi
+if ! [ -x $IPTABLES ] ; then
+	echo
+	echo "ERROR IN CONFIGURATION: IPTABLES doesn't exist or isn't executable!"
+	exit 1
+fi
+echo "passed"
+
+# Turn on IP forwarding (your kernel still needs it)
+echo 1 > /proc/sys/net/ipv4/ip_forward
+echo "IP Forwarding enabled..."
+
+# Enable TCP Syncookies (always a 'good thing') (thanks steff)
+echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+echo "IP SynCookies enabled..."
+
+# Flush everything
+# If you need compatability, you can comment some or all of these out,
+# but remember, if you re-run it, it'll just add the new rules in, it
+# won't remove the old ones for you then, this is how it removes them.
+# 
+# You'll notice I give status now :)
+echo -n "Flush: "
+${IPTABLES} -t filter -F INPUT
+echo -n "INPUT "
+${IPTABLES} -t filter -F OUTPUT
+echo -n "OUTPUT1 "
+${IPTABLES} -t filter -F FORWARD
+echo -n "FORWARD "
+${IPTABLES} -t nat -F PREROUTING
+echo -n "PREROUTING1 "
+${IPTABLES} -t nat -F OUTPUT
+echo -n "OUTPUT2 "
+${IPTABLES} -t nat -F POSTROUTING
+echo -n "POSTROUTING "
+${IPTABLES} -t mangle -F PREROUTING
+echo -n "PREROUTING2 "
+${IPTABLES} -t mangle -F OUTPUT
+echo -n "OUTPUT3"
+echo
+
+# Create new chains
+# Output to /dev/null in case they don't exist from a previous invocation
+echo -n "Creating chains: "
+for chain in ${FILTER_CHAINS} ; do
+	${IPTABLES} -t filter -F ${chain} > /dev/null 2>&1
+	${IPTABLES} -t filter -X ${chain} > /dev/null 2>&1
+	${IPTABLES} -t filter -N ${chain}
+	echo -n "${chain} "
+done
+echo
+
+# Default Policies
+# INPUT is still ACCEPT, the INETIN chain (defined above and jumped to later)
+# is given a policy of DROP at the end
+# Policy can't be reject becuase of kernel limitations
+echo -n "Default Policies: "
+${IPTABLES} -t filter -P INPUT ACCEPT
+echo -n "INPUT:ACCEPT "
+${IPTABLES} -t filter -P OUTPUT ACCEPT
+echo -n "OUTPUT:ACCEPT "
+${IPTABLES} -t filter -P FORWARD DROP
+echo -n "FORWARD:DROP "
+echo
+
+# Local traffic to internet or crossing subnets 
+# This should cover what we need if we don't use masquerading
+# Unfortunately, MAC address matching isn't bidirectional (for
+#   obvious reasons), so IP based matching is done here
+echo -n "Local Traffic Rules: "
+for subnet in ${INTERNAL_LAN} ; do
+	${IPTABLES} -t filter -A FORWARD -s ${subnet} -j ACCEPT
+	${IPTABLES} -t filter -A FORWARD -d ${subnet} -j ACCEPT
+	echo -n "${subnet}:ACCEPT "
+done
+echo
+
+# Set up basic NAT if the user wants it
+if [ $USE_MASQ = TRUE ] ; then
+	echo -n "Setting up NAT: "
+	if [ "$MAC_LAN" = "" ] ; then
+		for subnet in ${INTERNAL_LAN} ; do
+			${IPTABLES} -t nat -A POSTROUTING -s ${subnet} -o ${INET_IFACE} -j MASQUERADE
+			echo -n "${subnet}:MASQUERADE "
+		done
+	else	
+		for address in ${MAC_LAN} ; do
+			${IPTABLES} -t nat -A POSTROUTING -m mac --mac-source ${address} -o ${INET_IFACE} -j MASQUERADE
+			echo -n "${address}:MASQUERADE "
+		done
+	fi
+	echo
+elif [ "$USE_SNAT" != "" ] ; then #Static IP Defined 
+	#(I've heard this loop doesn't work, someone look at it since I can't test it on my dialup)
+	echo -n "Setting up NAT: "
+        if [ "$MAC_LAN" = "" ] ; then
+                for subnet in ${INTERNAL_LAN} ; do
+                        ${IPTABLES} -t nat -A POSTROUTING -s ${subnet} -o ${INET_IFACE} -j SNAT --to-source ${USE_SNAT}
+                        echo -n "${subnet}:SNAT "
+                done
+        else
+                for address in ${MAC_LAN} ; do
+                        ${IPTABLES} -t nat -A POSTROUTING -m mac --mac-source ${address} -o ${INET_IFACE} -j SNAT --to-source ${USE_SNAT}
+                        echo -n "${address}:SNAT "
+                done
+        fi  
+        echo
+fi
+
+#TCP Port-Forwards
+if [ "$TCP_FW" != "" ] ; then
+	echo -n "TCP Port Forwards: "
+	if [ "$USE_SNAT" != "" ] || [ $USE_MASQ = TRUE ] ; then
+		for rule in ${TCP_FW} ; do
+			ports=`echo $rule | sed 's/>.*//g'`
+			srcport=`echo $ports | sed 's/:.*//g'`
+			destport=`echo $ports | sed 's/.*://g'`
+			host=`echo $rule | sed 's/.*>//g'`
+			${IPTABLES} -t nat -A PREROUTING -p tcp -i ${INET_IFACE} --dport ${srcport} -j DNAT --to ${host}:${destport}
+			echo -n "${rule} "
+		done
+	else
+		for rule in ${TCP_FW} ; do
+                        ports=`echo $rule | sed 's/>.*//g'`
+                        srcport=`echo $ports | sed 's/:.*//g'`
+                        destport=`echo $ports | sed 's/.*://g'`
+                        host=`echo $rule | sed 's/.*>//g'`
+			${IPTABLES} -t nat -A PREROUTING -i ${INET_IFACE} -p tcp --dport ${srcport} -j REDIRECT --to ${host}:${destport}
+			echo -n "${rule} "
+		done
+	fi
+	echo
+fi
+
+#UDP Port Forwards
+if [ "$UDP_FW" != "" ] ; then
+        echo -n "UDP Port Forwards: "
+        if [ "$USE_SNAT" != "" ] || [ $USE_MASQ = TRUE ] ; then
+                for rule in ${UDP_FW} ; do
+                        ports=`echo $rule | sed 's/>.*//g'`
+                        srcport=`echo $ports | sed 's/:.*//g'`
+                        destport=`echo $ports | sed 's/.*://g'`
+                        host=`echo $rule | sed 's/.*>//g'`
+                        ${IPTABLES} -t nat -A PREROUTING -p udp -i ${INET_IFACE} --dport ${srcport} -j DNAT --to ${host}:${destport}
+                        echo -n "${rule} "
+                done
+        else
+                for rule in ${UDP_FW} ; do
+                        ports=`echo $rule | sed 's/>.*//g'`
+                        srcport=`echo $ports | sed 's/:.*//g'`
+                        destport=`echo $ports | sed 's/.*://g'`
+                        host=`echo $rule | sed 's/.*>//g'`
+                        ${IPTABLES} -t nat -A PREROUTING -i ${INET_IFACE} -p udp --dport ${srcport} -j REDIRECT --to ${host}:${destport}
+                        echo -n "${rule} "
+                done
+        fi
+        echo
+fi
+
+# ===============================================
+# -------Chain setup before jumping to them------
+# ===============================================
+
+
+# Set up INET chains
+echo -n "Setting up INET chains: "
+${IPTABLES} -t filter -A INPUT -i ${INET_IFACE} -j INETIN
+echo -n "INETIN "
+${IPTABLES} -t filter -A OUTPUT -o ${INET_IFACE} -j INETOUT
+echo -n "INETOUT "
+echo
+
+#These logging chains are valid to specify in DROP= above
+#Set up LDROP
+echo -n "Setting up logging chains: "
+${IPTABLES} -t filter -A LDROP -p tcp -j LOG --log-level info --log-prefix "TCP Dropped "
+${IPTABLES} -t filter -A LDROP -p udp -j LOG --log-level info --log-prefix "UDP Dropped "
+${IPTABLES} -t filter -A LDROP -p icmp -j LOG --log-level info --log-prefix "ICMP Dropped " 
+${IPTABLES} -t filter -A LDROP -f -j LOG --log-level warning --log-prefix "FRAGMENT Dropped "
+${IPTABLES} -t filter -A LDROP -j DROP
+echo -n "LDROP "
+        
+#And LREJECT too
+${IPTABLES} -t filter -A LREJECT -p tcp -j LOG --log-level info --log-prefix "TCP Rejected "
+${IPTABLES} -t filter -A LREJECT -p udp -j LOG --log-level info --log-prefix "UDP Rejected "
+${IPTABLES} -t filter -A LREJECT -p icmp -j LOG --log-level info --log-prefix "ICMP Dropped "
+${IPTABLES} -t filter -A LREJECT -f -j LOG --log-level warning --log-prefix "FRAGMENT Rejected "
+${IPTABLES} -t filter -A LREJECT -j REJECT
+echo -n "LREJECT "
+
+#newline
+echo
+
+
+# Set up the per-proto ACCEPT chains
+echo -n "Setting up per-proto ACCEPT: "
+
+# TCPACCEPT
+# SYN Flood Protection
+${IPTABLES} -t filter -A TCPACCEPT -p tcp --syn -m limit --limit 2/s -j ACCEPT
+${IPTABLES} -t filter -A TCPACCEPT -p tcp ! --syn -j ACCEPT
+# Log anything that hasn't matched yet and ${DROP} it since we don't know what it is
+${IPTABLES} -t filter -A TCPACCEPT -j LOG --log-prefix "Mismatch in TCPACCEPT "
+${IPTABLES} -t filter -A TCPACCEPT -j ${DROP}
+echo -n "TCPACCEPT "
+
+#UDPACCEPT
+${IPTABLES} -t filter -A UDPACCEPT -p udp -j ACCEPT
+# Log anything not on UDP (it shouldn't be here), and ${DROP} it since it's not supposed to be here
+${IPTABLES} -t filter -A UDPACCEPT -j LOG --log-prefix "Mismatch on UDPACCEPT "
+${IPTABLES} -t filter -A UDPACCEPT -j ${DROP}
+echo -n "UDPACCEPT "
+
+#Done
+echo
+
+# -------------------------------------------------
+# =================================================
+# -------------------------------------------------
+
+
+#Explicit denies
+if [ "$DENY_ALL" != "" ] ; then
+	echo -n "Denying hosts: "
+	for host in ${DENY_ALL} ; do
+		${IPTABLES} -t filter -A INETIN -s ${host} -j ${DROP}
+		echo -n "${host}:${DROP}"
+	done
+	echo
+fi
+
+#Invalid packets are always annoying
+echo -n "${DROP}ing invalid packets..."
+${IPTABLES} -t filter -A INETIN -m state --state INVALID -j ${DROP}
+echo "done"
+
+
+
+# ================================================================
+# ------------Allow stuff we have chosen to allow in--------------
+# ================================================================
+
+#Start allowing stuff
+
+# Flood "security"
+# You'll still respond to these if they comply with the limits
+# Default limits are 1/sec for ICMP pings
+# SYN Flood is on a per-port basis because it's a security hole to put it here!
+# This is just a packet limit, you still get the packets on the interface and 
+#    still may experience lag if the flood is heavy enough
+echo -n "Flood limiting: "
+# Ping Floods (ICMP echo-request)
+${IPTABLES} -t filter -A INETIN -p icmp --icmp-type echo-request -m limit --limit 1/s -j ACCEPT
+echo -n "ICMP-PING "
+echo
+
+echo -n "Allowing the rest of the ICMP messages in..."
+${IPTABLES} -t filter -A INETIN -p icmp --icmp-type ! echo-request -j ACCEPT
+echo "done"
+
+if [ "$TCP_ALLOW" != "" ] ; then
+	echo -n "TCP Input Allow: "
+	for port in ${TCP_ALLOW} ; do
+	        if [ "0$port" == "021" ]; then #Active FTP (thanks steff)
+	           ${IPTABLES} -t filter -A INETIN -p tcp --sport 20 --dport 1024:65535 ! --syn -j TCPACCEPT
+		fi
+ 		${IPTABLES} -t filter -A INETIN -p tcp --dport ${port} -j TCPACCEPT
+		echo -n "${port} "
+	done
+	echo
+fi
+
+if [ "$UDP_ALLOW" != "" ] ; then
+	echo -n "UDP Input Allow: "
+	for port in ${UDP_ALLOW} ; do
+		${IPTABLES} -t filter -A INETIN -p udp --dport ${port} -j UDPACCEPT
+		echo -n "${port} "
+	done
+	echo
+fi
+
+if [ "$DNS" != "" ] ; then
+	echo -n "DNS Zone Transfers: "
+	for server in ${DNS} ; do
+		${IPTABLES} -t filter -A INETIN	-p udp -s ${server} --sport 53 -j UDPACCEPT
+		echo -n "${server} "
+	done
+	echo
+fi
+
+#SSH Rulesets
+if [ $USE_SSH1 = TRUE ] || [ $USE_OPENSSH = TRUE ]; then
+	 echo -n "Accounting for SSH..."
+	if [ $USE_SSH1 = TRUE ]; then #SSH1
+		${IPTABLES} -t filter -A INETIN -p tcp --sport 22 --dport 513:1023 ! --syn -j TCPACCEPT
+		echo -n "SSH1 "
+	fi
+	if [ $USE_OPENSSH = TRUE ] ; then #OpenSSH
+		${IPTABLES} -t filter -A INETIN -p tcp --sport 22 --dport 1024:65535 ! --syn -j TCPACCEPT
+		echo -n "OpenSSH "
+	fi
+	echo
+fi
+
+#AUTH(identd) host-based allows
+if [ "$AUTH_ALLOW" != "" ] ; then
+	echo -n "AUTH accepts: "
+	for host in ${AUTH_ALLOW} ; do
+		${IPTABLES} -t filter -A INETIN -p tcp -s ${host} --dport 113 -j TCPACCEPT
+		echo -n "${host} "
+	done
+	echo
+fi
+
+echo -n "Allowing established outbound connections back in..."
+${IPTABLES} -t filter -A INETIN -m state --state ESTABLISHED,RELATED -j ACCEPT
+echo "done"
+
+#What to do on those INET chains when we hit the end
+echo -n "Setting up INET policies: "
+#Drop if we cant find a valid inbound rule.
+${IPTABLES} -t filter -A INETIN -j ${DROP}
+echo -n "INETIN:${DROP} "
+#We can send what we want to the internet
+${IPTABLES} -t filter -A INETOUT -j ACCEPT
+echo -n "INETOUT:ACCEPT "
+echo
+
+#All done!
+echo "Done loading the firewall!"

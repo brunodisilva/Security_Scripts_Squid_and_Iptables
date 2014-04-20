@@ -1,0 +1,1062 @@
+#!/bin/sh
+#
+# http://www.Sentry.net/~obsid/IPTables/rc.scripts.dir/current/rc.firewall.iptables.multi
+#
+##################################################################
+#
+## rc.firewall.iptables.multi -- Version 1.2b2
+#
+##################################################################
+
+## Obsid@sentry.net
+## http://www.sentry.net/~obsid/
+## 04/28/01
+
+## Example IPTables 1.2.1 script for a multi-homed firewall.
+## Please feel free to send me any comments or suggestions.
+
+## Current versions and documentation are available at
+## http://www.sentry.net/~obsid/IPTables/rc.scripts.dir/current/
+
+## Visit one of the NetFilter Project Home Pages for more information about IPTables.
+## http://netfilter.filewatcher.org/
+## http://netfilter.samba.org/
+
+## More Resources:
+## http://netfilter.filewatcher.org/netfilter-faq.html
+## http://netfilter.filewatcher.org/unreliable-guides/networking-concepts-HOWTO/index.html
+## http://netfilter.filewatcher.org/unreliable-guides/packet-filtering-HOWTO/index.html
+## http://netfilter.filewatcher.org/unreliable-guides/NAT-HOWTO/index.html
+## http://www.ds9a.nl/2.4Routing/HOWTO/cvs/2.4routing/output/2.4routing.html
+
+## Variables ##
+IPTABLES="/usr/local/sbin/iptables"	## Default IPTables >= v. 1.2.0
+#IPTABLES="/usr/local/bin/iptables"	## Default IPTables <= v. 1.1.2
+
+LOOPBACK="lo"			## Loopback Interface
+EXTERNAL="eth0"			## External Interface
+INTERNAL="eth1"			## Internal Interface
+DMZ_IF="eth2"			## DMZ Interface
+
+INTERNAL_NET="192.168.1.0/24"	## Network address for the internal network
+DMZ_NET="192.168.2.0/24"	## Network address for the DMZ
+
+## INT_IP="192.168.1.10"	## IP Address of Internal Interface
+   INT_IP=`ifconfig $INTERNAL | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+
+## DMZ_IP="192.168.2.10"	## IP Address of DMZ Interface
+   DMZ_IP=`ifconfig $DMZ_IF | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+
+   EXT_IP="216.162.197.10 \	## IP Address(es) of External Interface
+	   216.162.197.11"	## (This variable not used at this time).
+## EXT_IP=`ifconfig $EXTERNAL | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+
+LOG_LEVEL="notice"		## Default log level: kern.notice
+
+## Attempt to Flush All Rules in Filter Table
+$IPTABLES -F
+
+## Flush Built-in Rules
+$IPTABLES -F INPUT
+$IPTABLES -F OUTPUT
+$IPTABLES -F FORWARD
+
+## Flush Rules/Delete User Chains in Mangle Table, if any
+$IPTABLES -F -t mangle
+$IPTABLES -t mangle -X
+
+## Delete all user-defined chains, reduces dumb warnings if you run
+## this script more than once.
+$IPTABLES -X
+
+## Set Default Policies
+$IPTABLES -P INPUT DROP		## Highly Recommended Default Policy
+$IPTABLES -P OUTPUT DROP
+$IPTABLES -P FORWARD ACCEPT
+
+
+## Reserved/Private IP Addresses ##
+   ## The following was adapted from Jean-Sebastien Morisset's excellent IPChains
+   ## firewall script, available at -- http://jsmoriss.mvlan.net/linux/rcf.html
+   ## See DOCUMENTATION for optimization notes.
+
+   RESERVED_NET="
+	0.0.0.0/8 1.0.0.0/8 2.0.0.0/8 \
+	5.0.0.0/8 \
+	7.0.0.0/8 \
+	23.0.0.0/8 \
+	27.0.0.0/8 \
+	31.0.0.0/8 \
+	36.0.0.0/8 37.0.0.0/8 \
+	39.0.0.0/8 \
+	41.0.0.0/8 42.0.0.0/8 \
+	58.0.0.0/8 59.0.0.0/8 60.0.0.0/8 \
+	67.0.0.0/8 68.0.0.0/8 69.0.0.0/8 70.0.0.0/8 71.0.0.0/8 72.0.0.0/8 73.0.0.0/8 \
+	74.0.0.0/8 75.0.0.0/8 76.0.0.0/8 77.0.0.0/8 78.0.0.0/8 79.0.0.0/8 80.0.0.0/8 \
+	81.0.0.0/8 82.0.0.0/8 83.0.0.0/8 84.0.0.0/8 85.0.0.0/8 86.0.0.0/8 87.0.0.0/8 \
+	88.0.0.0/8 89.0.0.0/8 90.0.0.0/8 91.0.0.0/8 92.0.0.0/8 93.0.0.0/8 94.0.0.0/8 \
+	95.0.0.0/8 96.0.0.0/8 97.0.0.0/8 98.0.0.0/8 99.0.0.0/8 100.0.0.0/8 101.0.0.0/8 \
+	102.0.0.0/8 103.0.0.0/8 104.0.0.0/8 105.0.0.0/8 106.0.0.0/8 107.0.0.0/8 \
+	108.0.0.0/8 109.0.0.0/8 110.0.0.0/8 111.0.0.0/8 112.0.0.0/8 113.0.0.0/8 \
+	114.0.0.0/8 115.0.0.0/8 116.0.0.0/8 117.0.0.0/8 118.0.0.0/8 119.0.0.0/8 \
+	120.0.0.0/8 121.0.0.0/8 122.0.0.0/8 123.0.0.0/8 124.0.0.0/8 125.0.0.0/8 \
+	126.0.0.0/8 127.0.0.0/8 \
+	197.0.0.0/8 \
+	201.0.0.0/8 \
+	219.0.0.0/8 220.0.0.0/8 221.0.0.0/8 222.0.0.0/8 223.0.0.0/8 \
+	240.0.0.0/8 241.0.0.0/8 242.0.0.0/8 243.0.0.0/8 244.0.0.0/8 245.0.0.0/8 \
+	246.0.0.0/8 247.0.0.0/8 248.0.0.0/8 249.0.0.0/8 250.0.0.0/8 251.0.0.0/8 \
+	252.0.0.0/8 253.0.0.0/8 254.0.0.0/8 255.0.0.0/8"
+
+
+## More variables further down near the NAT rules.
+
+## NOTE: User-defined chains first, regular INPUT/OUTPUT chains will follow.
+
+###############################################################################
+## Special Chains
+###############################################################################
+
+###############################################################################
+## Special chain KEEP_STATE to handle incoming, outgoing, and
+## established connections.
+
+	$IPTABLES -N KEEP_STATE
+	$IPTABLES -F KEEP_STATE
+
+   ##------------------------------------------------------------------------##
+   ## DROP packets associated with an "INVALID" connection.
+	$IPTABLES -A KEEP_STATE -m state --state INVALID -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## UNCLEAN match target, somewhat experimental at this point.
+#        $IPTABLES -A KEEP_STATE -m unclean -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## ACCEPT packets which are related to an established connection.
+	$IPTABLES -A KEEP_STATE -m state --state RELATED,ESTABLISHED -j ACCEPT
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special chain CHECK_FLAGS that will DROP and log TCP packets with certain
+## TCP flags set.
+
+  ## We set some limits here to limit the amount of crap that gets sent to the logs.
+  ## Keep in mind that these rules should never match normal traffic, they
+  ## are designed to capture obviously messed up packets... but there's alot of
+  ## wierd shit out there, so who knows.
+
+	$IPTABLES -N CHECK_FLAGS
+	$IPTABLES -F CHECK_FLAGS
+
+   ##------------------------------------------------------------------------##
+   ## NMAP FIN/URG/PSH
+	$IPTABLES -A CHECK_FLAGS -p tcp --tcp-flags ALL FIN,URG,PSH -m limit \
+		--limit 5/minute -j LOG --log-level $LOG_LEVEL --log-prefix "NMAP-XMAS:"
+	$IPTABLES -A CHECK_FLAGS -p tcp --tcp-flags ALL FIN,URG,PSH -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## SYN/RST
+	$IPTABLES -A CHECK_FLAGS -p tcp --tcp-flags SYN,RST SYN,RST -m limit \
+		--limit 5/minute -j LOG --log-level $LOG_LEVEL --log-prefix "SYN/RST:"
+	$IPTABLES -A CHECK_FLAGS -p tcp --tcp-flags SYN,RST SYN,RST -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## SYN/FIN -- Scan(probably)
+	$IPTABLES -A CHECK_FLAGS -p tcp --tcp-flags SYN,FIN SYN,FIN -m limit \
+		--limit 5/minute -j LOG --log-level $LOG_LEVEL --log-prefix "SYN/FIN:"
+	$IPTABLES -A CHECK_FLAGS -p tcp --tcp-flags SYN,FIN SYN,FIN -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Make some types of port scans annoyingly slow, also provides some
+   ## protection against certain DoS attacks. The rule in chain KEEP_STATE
+   ## referring to the INVALID state should catch most TCP packets with the
+   ## RST or FIN bits set that aren't associate with an established connection.
+   ## Still, these will limit the amount of stuff that is accepted through our
+   ## open ports(if any).  I suggest you test these for your configuration before
+   ## you uncomment them, as they could cause problems.
+
+#	$IPTABLES -A CHECK_FLAGS -m limit --limit 5/second -p tcp --tcp-flags ALL RST -j ACCEPT
+#	$IPTABLES -A CHECK_FLAGS -m limit --limit 5/second -p tcp --tcp-flags ALL FIN -j ACCEPT
+#	$IPTABLES -A CHECK_FLAGS -m limit --limit 5/second -p tcp --tcp-flags ALL SYN -j ACCEPT
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain DENY_PORTS
+## This chain will DROP/LOG packets based on port number.
+
+	$IPTABLES -N DENY_PORTS
+	$IPTABLES -F DENY_PORTS
+
+        ##------------------------------------------------------------------------##
+	## DROP TCP packets based on port number.
+	## See DOCUMENTATION for explanation of these example port numbers.
+
+	   DENIED_PORTS_TCP="137:139 2049 6000:6063 \
+			20034 12345:12346 27374 27665 \
+			27444 31335 10498 12754"
+
+	   for PORT in $DENIED_PORTS_TCP; do
+		$IPTABLES -A DENY_PORTS -p tcp --dport $PORT -m limit --limit 5/minute \
+			-j LOG	--log-level $LOG_LEVEL --log-prefix "DENIED PORT:"
+		$IPTABLES -A DENY_PORTS -p tcp --sport $PORT -m limit --limit 5/minute \
+			-j LOG --log-level $LOG_LEVEL --log-prefix "DENIED PORT:"
+
+		$IPTABLES -A DENY_PORTS -p tcp --dport $PORT -j DROP
+		$IPTABLES -A DENY_PORTS -p tcp --sport $PORT -j DROP
+	   done
+        ##------------------------------------------------------------------------##
+
+        ##------------------------------------------------------------------------##
+	## DROP UDP packets based on port number.
+	## See DOCUMENTATION for explanation of these example port numbers.
+
+	   DENIED_PORTS_UDP="2049 31337 27444 31335 10498"
+
+	   for PORT in $DENIED_PORTS_UDP; do
+		$IPTABLES -A DENY_PORTS -p udp --dport $PORT -m limit --limit 5/minute \
+			-j LOG --log-level $LOG_LEVEL --log-prefix "DENIED PORT:"
+		$IPTABLES -A DENY_PORTS -p udp --sport $PORT -m limit --limit 5/minute \
+			-j LOG --log-level $LOG_LEVEL --log-prefix "DENIED PORT:"
+
+		$IPTABLES -A DENY_PORTS -p udp --dport $PORT -j DROP
+		$IPTABLES -A DENY_PORTS -p udp --sport $PORT -j DROP
+	   done
+        ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain ALLOW_PORTS
+## Rules to allow packets based on port number. This sort of thing is generally
+## required only if you're running services on(!!!) the firewall or if you have a
+## FORWARD policy of DROP(which we don't right now).
+
+	$IPTABLES -N ALLOW_PORTS
+	$IPTABLES -F ALLOW_PORTS
+
+   ##------------------------------------------------------------------------##
+   ## ACCEPT TCP traffic based on port number. (Examples)
+
+#	TCP_PORTS="ssh domain"
+	TCP_PORTS="22 53"
+
+	for PORT in $TCP_PORTS; do
+		$IPTABLES -A ALLOW_PORTS -m state --state NEW -p tcp \
+			--dport $PORT -j ACCEPT
+	done
+   ##------------------------------------------------------------------------##
+   ## ACCEPT UDP traffic based on port number.
+
+#	UDP_PORTS="domain"
+	UDP_PORTS="53"
+
+	for PORT in $UDP_PORTS; do
+		$IPTABLES -A ALLOW_PORTS -m state --state NEW -p udp \
+			--dport $PORT -j ACCEPT
+	done
+
+   ##------------------------------------------------------------------------##
+   ## REJECT port 113 ident requests.
+	$IPTABLES -A ALLOW_PORTS -p tcp --dport 113 -j REJECT \
+		--reject-with tcp-reset
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain ALLOW_ICMP
+## This chain contains rules to allow/drop specific types of ICMP datagrams.
+
+	$IPTABLES -N ALLOW_ICMP
+	$IPTABLES -F ALLOW_ICMP
+
+     ##------------------------------------------------------------------------##
+     ## Echo Reply (pong)
+	$IPTABLES -A ALLOW_ICMP -p icmp --icmp-type echo-reply -j ACCEPT
+     ##------------------------------------------------------------------------##
+
+     ##------------------------------------------------------------------------##
+     ## Destination Unreachable
+	$IPTABLES -A ALLOW_ICMP -p icmp --icmp-type destination-unreachable \
+		-j ACCEPT
+     ##------------------------------------------------------------------------##
+
+     ##------------------------------------------------------------------------##
+     ## Echo Request (ping) -- Several Options:
+
+        ## Accept Pings ##
+		$IPTABLES -A ALLOW_ICMP -p icmp --icmp-type echo-request -j ACCEPT
+
+	## Accept Pings at the rate of one per second ##
+#		$IPTABLES -A ALLOW_ICMP -p icmp --icmp-type echo-request \
+#			-m limit --limit 1/second -j ACCEPT
+
+	## LOG all pings ##
+#       	$IPTABLES -A ALLOW_ICMP -p icmp --icmp-type echo-request \
+#			-m limit --limit 5/minute -j LOG --log-level $LOG_LEVEL \
+#			--log-prefix "PING:"
+     ##------------------------------------------------------------------------##
+
+     ##------------------------------------------------------------------------##
+     ## TTL Exceeded (traceroute)
+	$IPTABLES -A ALLOW_ICMP -p icmp --icmp-type time-exceeded -j ACCEPT
+     ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain SRC_EGRESS
+## Rules to Provide Egress Filtering Based on Source IP Address.
+
+	$IPTABLES -N SRC_EGRESS
+	$IPTABLES -F SRC_EGRESS
+
+   ##------------------------------------------------------------------------##
+   ## DROP all reserved private IP addresses.  Some of these may be legit
+   ## for certain networks and configurations.  For connection problems,
+   ## traceroute is your friend.
+
+	## Class A Reserved
+	$IPTABLES -A SRC_EGRESS -s 10.0.0.0/8 -j DROP
+
+	## Class B Reserved
+	$IPTABLES -A SRC_EGRESS -s 172.16.0.0/12 -j DROP
+
+	## Class C Reserved
+	$IPTABLES -A SRC_EGRESS -s 192.168.0.0/16 -j DROP
+
+	## Class D Reserved
+	$IPTABLES -A SRC_EGRESS -s 224.0.0.0/4 -j DROP
+
+	## Class E Reserved
+	$IPTABLES -A SRC_EGRESS -s 240.0.0.0/5 -j DROP
+
+	for NET in $RESERVED_NET; do
+	    $IPTABLES -A SRC_EGRESS -s $NET -j DROP
+	done
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain DST_EGRESS
+## Rules to Provide Egress Filtering Based on Destination IP Address.
+
+	$IPTABLES -N DST_EGRESS
+	$IPTABLES -F DST_EGRESS
+
+   ##------------------------------------------------------------------------##
+   ## DROP all reserved private IP addresses.  Some of these may be legit
+   ## for certain networks and configurations.  For connection problems,
+   ## traceroute is your friend.
+
+	## Class A Reserved
+	$IPTABLES -A DST_EGRESS -d 10.0.0.0/8 -j DROP
+
+	## Class B Reserved
+	$IPTABLES -A DST_EGRESS -d 172.16.0.0/12 -j DROP
+
+	## Class C Reserved
+	$IPTABLES -A DST_EGRESS -d 192.168.0.0/16 -j DROP
+
+	## Class D Reserved
+	$IPTABLES -A DST_EGRESS -d 224.0.0.0/4 -j DROP
+
+	## Class E Reserved
+	$IPTABLES -A DST_EGRESS -d 240.0.0.0/5 -j DROP
+
+	for NET in $RESERVED_NET; do
+	    $IPTABLES -A DST_EGRESS -d $NET -j DROP
+	done
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain MANGLE_OUTPUT
+## Mangle values of packets created locally.  Only TOS values are mangled right
+## now.
+
+   ## TOS stuff: (type: iptables -m tos -h)
+   ## Minimize-Delay 16 (0x10)
+   ## Maximize-Throughput 8 (0x08)
+   ## Maximize-Reliability 4 (0x04)
+   ## Minimize-Cost 2 (0x02)
+   ## Normal-Service 0 (0x00)
+
+	$IPTABLES -t mangle -N MANGLE_OUTPUT
+	$IPTABLES -t mangle -F MANGLE_OUTPUT
+
+   ##------------------------------------------------------------------------------##
+   ##   - Most of these are the RFC 1060/1349 suggested TOS values, yours might vary.
+   ##   - To view mangle table, type: iptables -L -t mangle
+
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 20 -j TOS --set-tos 8
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 21 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 22 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 23 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 25 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 53 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p udp --dport 53 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_OUTPUT -p tcp --dport 80 -j TOS --set-tos 8
+   ##------------------------------------------------------------------------------##
+
+
+###############################################################################
+## Special Chain MANGLE_PREROUTING
+## Rules to mangle TOS values of packets routed through the firewall.  Only TOS
+## values are mangled right now.
+
+   ## TOS stuff: (type: iptables -m tos -h)
+   ## Minimize-Delay 16 (0x10)
+   ## Maximize-Throughput 8 (0x08)
+   ## Maximize-Reliability 4 (0x04)
+   ## Minimize-Cost 2 (0x02)
+   ## Normal-Service 0 (0x00)
+
+	$IPTABLES -t mangle -N MANGLE_PREROUTING
+	$IPTABLES -t mangle -F MANGLE_PREROUTING
+
+   ##-------------------------------------------------------------------------------##
+   ##   - Most of these are the RFC 1060/1349 suggested TOS values, yours might vary.
+   ##   - To view mangle table, type: iptables -L -t mangle
+
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 20 -j TOS --set-tos 8
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 21 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 22 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 23 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 25 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 53 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p udp --dport 53 -j TOS --set-tos 16
+	$IPTABLES -t mangle -A MANGLE_PREROUTING -p tcp --dport 80 -j TOS --set-tos 8
+   ##-------------------------------------------------------------------------------##
+
+
+###############################################################################
+## Firewall Input Chains
+###############################################################################
+
+###############################################################################
+## New chain for input to the external interface
+
+	$IPTABLES -N EXTERNAL_INPUT
+	$IPTABLES -F EXTERNAL_INPUT
+
+   ##------------------------------------------------------------------------##
+   ## Hated Hosts -- Block hosts/subnets(Example)
+#	$IPTABLES -A EXTERNAL_INPUT -i $EXTERNAL -s 123.123.123.0/24 -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Check TCP packets coming in on the external interface for wierd flags
+	$IPTABLES -A EXTERNAL_INPUT -i $EXTERNAL -p tcp -j CHECK_FLAGS
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Filter incoming packets based on port number.
+	$IPTABLES -A EXTERNAL_INPUT -i $EXTERNAL -p ! icmp -j DENY_PORTS
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## New chain for input to the internal interface
+
+	$IPTABLES -N INTERNAL_INPUT
+	$IPTABLES -F INTERNAL_INPUT
+
+   ##------------------------------------------------------------------------##
+   ## DROP anything not coming from the internal network.
+	$IPTABLES -A INTERNAL_INPUT -i $INTERNAL -s ! $INTERNAL_NET -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Check TCP packets coming in on the external interface for wierd flags.
+	$IPTABLES -A INTERNAL_INPUT -i $INTERNAL -p tcp -j CHECK_FLAGS
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## DROP/LOG packets based on port number.
+	$IPTABLES -A INTERNAL_INPUT -i $INTERNAL -p ! icmp -j DENY_PORTS
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## New chain for input to the DMZ interface
+
+	$IPTABLES -N DMZ_INPUT
+	$IPTABLES -F DMZ_INPUT
+
+   ##------------------------------------------------------------------------##
+   ## DROP anything not coming from the DMZ network
+	$IPTABLES -A DMZ_INPUT -i $DMZ_IF -s ! $DMZ_NET -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## DROP/LOG packets based on port number.
+	$IPTABLES -A DMZ_INPUT -i $DMZ_IF -p ! icmp -j DENY_PORTS
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Check TCP packets coming in on the DMZ interface for wierd flags.
+	$IPTABLES -A DMZ_INPUT -i $DMZ_IF -p tcp -j CHECK_FLAGS
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## New chain for input to the loopback interface
+
+	$IPTABLES -N LO_INPUT
+	$IPTABLES -F LO_INPUT
+
+   ##------------------------------------------------------------------------##
+   ## Accept packets to the loopback interface.
+	$IPTABLES -A LO_INPUT -i $LOOPBACK -j ACCEPT
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Firewall Output Chains
+###############################################################################
+
+###############################################################################
+## New chain for output from the external interface
+
+	$IPTABLES -N EXTERNAL_OUTPUT
+	$IPTABLES -F EXTERNAL_OUTPUT
+
+   ##------------------------------------------------------------------------##
+   ## Check TCP packets coming in on the external interface for wierd flags.
+	$IPTABLES -A EXTERNAL_OUTPUT -o $EXTERNAL -p tcp -j CHECK_FLAGS
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Filter outgoing packets based on port number.
+	$IPTABLES -A EXTERNAL_OUTPUT -o $EXTERNAL -p ! icmp -j DENY_PORTS
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## New chain for output across the internal interface
+
+	$IPTABLES -N INTERNAL_OUTPUT
+	$IPTABLES -F INTERNAL_OUTPUT
+
+   ##------------------------------------------------------------------------##
+   ## DROP packets not destined for the internal network.
+	$IPTABLES -A INTERNAL_OUTPUT -o $INTERNAL -d ! $INTERNAL_NET -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Filter outgoing packets based on port number.
+	$IPTABLES -A INTERNAL_OUTPUT -o $INTERNAL -p ! icmp -j DENY_PORTS
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Check TCP packets going out on the internal interface for wierd flags.
+	$IPTABLES -A INTERNAL_OUTPUT -o $INTERNAL -p tcp -j CHECK_FLAGS
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## New chain for output across the DMZ interface
+
+	$IPTABLES -N DMZ_OUTPUT
+	$IPTABLES -F DMZ_OUTPUT
+
+   ##------------------------------------------------------------------------##
+   ## DROP packets not destined for the DMZ_NET.
+	$IPTABLES -A DMZ_OUTPUT -o $DMZ_IF -d ! $DMZ_NET -j DROP
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Filter outgoing packets based on port number.
+	$IPTABLES -A DMZ_OUTPUT -o $DMZ_IF -p ! icmp -j DENY_PORTS
+   ##------------------------------------------------------------------------##
+
+   ##------------------------------------------------------------------------##
+   ## Check TCP packets going out on the DMZ interface for wierd flags.
+	$IPTABLES -A DMZ_OUTPUT -o $DMZ_IF -p tcp -j CHECK_FLAGS
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## New chain for output across the loopback device
+
+	$IPTABLES -N LO_OUTPUT
+	$IPTABLES -F LO_OUTPUT
+
+   ##------------------------------------------------------------------------##
+   ## ACCEPT all traffic across loopback device
+	$IPTABLES -A LO_OUTPUT -o $LOOPBACK -j ACCEPT
+   ##------------------------------------------------------------------------##
+
+
+###############################################################################
+## Main Stuff
+###############################################################################
+
+## This is where we get to jump to our user-defined chains from the built-in
+## chains.
+
+   ##========================================================================##
+   ## Jump to the mangle table rules.
+	$IPTABLES -t mangle -A OUTPUT -o $EXTERNAL -j MANGLE_OUTPUT
+	$IPTABLES -t mangle -A PREROUTING -i $DMZ_IF -j MANGLE_PREROUTING
+	$IPTABLES -t mangle -A PREROUTING -i $INTERNAL -j MANGLE_PREROUTING
+   ##========================================================================##
+
+   ##========================================================================##
+   ## LOG and DROP TCP packets with no flags set.
+   ## Possible NULL scan.
+	$IPTABLES -t mangle -A PREROUTING -p tcp --tcp-flags ALL NONE \
+		-m limit --limit 5/minute -j LOG --log-level $LOG_LEVEL \
+		--log-prefix "NULL SCAN:" --log-tcp-options --log-ip-options
+	$IPTABLES -t mangle -A PREROUTING -p tcp --tcp-flags ALL NONE -j DROP
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Jump to our INPUT chains.
+
+        ##===================================================================##
+	## INPUT to our loopback interface.
+
+	   ## Jump to our LO_INPUT Chain.
+		$IPTABLES -A INPUT -i $LOOPBACK -j LO_INPUT
+        ##===================================================================##
+
+        ##===================================================================##
+	## INPUT to our internal interface.
+
+	   ## DROP packets not destined for the internal IP address of the
+	   ## firewall.
+		$IPTABLES -A INPUT -i $INTERNAL -d ! $INT_IP -j DROP
+
+	   ## Jump to our INTERNAL_INPUT Chain.
+		$IPTABLES -A INPUT -i $INTERNAL -j INTERNAL_INPUT
+
+	   ## DROP/ACCEPT packets based on the state of the connection.
+		$IPTABLES -A INPUT -i $INTERNAL -j KEEP_STATE
+
+	   ## ACCEPT packets based on port number.
+		$IPTABLES -A INPUT -i $INTERNAL -s $INTERNAL_NET -d $INT_IP \
+			-p ! icmp -j ALLOW_PORTS
+
+	   ## Jump to ALLOW_ICMP for general rules relating to the ICMP protocol.
+		$IPTABLES -A INPUT -i $INTERNAL -p icmp -j ALLOW_ICMP
+        ##===================================================================##
+
+        ##===================================================================##
+	## INPUT to the external Interface
+
+	   ## Filter out Reserved/Private IP addresses based on source IP.
+		$IPTABLES -A INPUT -i $EXTERNAL -j SRC_EGRESS
+
+	   ## Filter out Reserved/Private IP addresses based on destination IP.
+		$IPTABLES -A INPUT -i $EXTERNAL -j DST_EGRESS
+
+	   ## Jump to our EXTERNAL_INPUT Chain.
+		$IPTABLES -A INPUT -i $EXTERNAL -j EXTERNAL_INPUT
+
+	   ## DROP/ACCEPT packets based on the state of the connection.
+		$IPTABLES -A INPUT -i $EXTERNAL -j KEEP_STATE
+
+	   ## Allow Packets On Certain External Ports.
+		$IPTABLES -A INPUT -i $EXTERNAL -p ! icmp -j ALLOW_PORTS
+
+	   ## Jump to ALLOW_ICMP for general rules relating to the ICMP protocol.
+		$IPTABLES -A INPUT -i $EXTERNAL -p icmp -j ALLOW_ICMP
+        ##===================================================================##
+
+        ##===================================================================##
+	## INPUT to the DMZ interface.
+
+	   ## DROP packets not destined for the DMZ IP address of the
+	   ## firewall.
+		$IPTABLES -A INPUT -i $DMZ_IF -d ! $DMZ_IP -j DROP
+
+	   ## Jump to our EXTERNAL_INPUT Chain.
+		$IPTABLES -A INPUT -i $DMZ_IF -j DMZ_INPUT
+
+	   ## DROP/ACCEPT packets based on the state of the connection.
+		$IPTABLES -A INPUT -i $DMZ_IF -j KEEP_STATE
+
+	   ## ACCEPT packets based on port number.
+		$IPTABLES -A INPUT -i $DMZ_IF -p ! icmp -s $DMZ_NET \
+			-d $DMZ_IP -j ALLOW_PORTS
+
+	   ## Jump to ALLOW_ICMP for general rules relating to the ICMP protocol.
+		$IPTABLES -A INPUT -i $DMZ_IF -p icmp -j ALLOW_ICMP
+        ##===================================================================##
+
+   ## End INPUT Chain Rules ##
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Jump to our OUTPUT chains.
+
+        ##===================================================================##
+	## OUTPUT on the loopback interface.
+
+	   ## Jump to our LO_OUTPUT Chain.
+		$IPTABLES -A OUTPUT -o $LOOPBACK -j LO_OUTPUT
+        ##===================================================================##
+
+        ##===================================================================##
+	## OUTPUT on the internal interface.
+
+	   ## Jump to our INTERNAL_OUTPUT Chain.
+		$IPTABLES -A OUTPUT -o $INTERNAL -j INTERNAL_OUTPUT
+
+	   ## DROP anything not coming from the firewall.
+		$IPTABLES -A OUTPUT -o $INTERNAL -s ! $INT_IP -j DROP
+
+	   ## Jump to the KEEP_STATE chain for generic state-based packet filtering.
+		$IPTABLES -A OUTPUT -o $INTERNAL -j KEEP_STATE
+
+	   ## ACCEPT NEW connections from the firewall to the internal network.
+		$IPTABLES -A OUTPUT -o $INTERNAL -s $INT_IP \
+			-d $INTERNAL_NET -m state --state NEW -j ACCEPT
+        ##===================================================================##
+
+        ##===================================================================##
+	## OUTPUT on the external interface
+
+	   ## Filter out Reserved/Private IP addresses based on source IP.
+		$IPTABLES -A OUTPUT -o $EXTERNAL -j SRC_EGRESS
+
+	   ## Filter out Reserved/Private IP addresses based on destination IP.
+		$IPTABLES -A OUTPUT -o $EXTERNAL -j DST_EGRESS
+
+	   ## Jump to our EXTERNAL_OUTPUT Chain.
+		$IPTABLES -A OUTPUT -o $EXTERNAL -j EXTERNAL_OUTPUT
+
+	   ## Jump to the KEEP_STATE chain for generic state-based packet filtering.
+		$IPTABLES -A OUTPUT -o $EXTERNAL -j KEEP_STATE
+
+	   ## Accept outgoing packets establishing a NEW connection.
+		$IPTABLES -A OUTPUT -o $EXTERNAL -m state --state NEW -j ACCEPT
+        ##===================================================================##
+
+        ##===================================================================##
+	## OUTPUT on the DMZ interface.
+
+	   ## Jump to out DMZ_OUTPUT Chain.
+		$IPTABLES -A OUTPUT -o $DMZ_IF -j DMZ_OUTPUT
+
+	   ## DROP anything not coming from the firewall.
+		$IPTABLES -A OUTPUT -o $DMZ_IF -s ! $DMZ_IP -j DROP
+
+	   ## Jump to KEEP_STATE for generic stateful filtering.
+		$IPTABLES -A OUTPUT -o $DMZ_IF -j KEEP_STATE
+
+	   ## Jump to ALLOW_ICMP to allow some ICMP stuff.
+		$IPTABLES -A OUTPUT -o $DMZ_IF -d $DMZ_NET -p icmp -j ALLOW_ICMP
+
+	   ## ACCEPT NEW connections from the firewall to the DMZ network.
+		$IPTABLES -A OUTPUT -o $DMZ_IF -s $DMZ_IP -d $DMZ_NET \
+			-m state --state NEW -j ACCEPT
+        ##===================================================================##
+
+   ## End OUTPUT Chain Rules ##
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Jump to our FORWARD chains.
+
+
+        ##===================================================================##
+	## Jump to our (INTERFACE)_INPUT/OUTPUT Chains.
+
+		$IPTABLES -A FORWARD -i $EXTERNAL -j EXTERNAL_INPUT
+		$IPTABLES -A FORWARD -i $INTERNAL -j INTERNAL_INPUT
+		$IPTABLES -A FORWARD -i $DMZ_IF -j DMZ_INPUT
+		$IPTABLES -A FORWARD -o $EXTERNAL -j EXTERNAL_OUTPUT
+		$IPTABLES -A FORWARD -o $INTERNAL -j INTERNAL_OUTPUT
+		$IPTABLES -A FORWARD -o $DMZ_IF -j DMZ_OUTPUT
+
+        ##===================================================================##
+
+        ##===================================================================##
+	## More rules to DROP stuff.
+
+	   ##----------------------------------------------------------------##
+	   ## DROP any attempted NEW connections to the internal network.
+		$IPTABLES -A FORWARD -i $EXTERNAL -d $INTERNAL_NET -m state \
+			--state NEW -j DROP
+	   ##----------------------------------------------------------------##
+
+	   ##----------------------------------------------------------------##
+	   ## DROP all attempted NEW connections from the DMZ to the internal net.
+		$IPTABLES -A FORWARD -i $DMZ_IF -d $INTERNAL_NET -m state \
+			--state NEW -j DROP
+	   ##----------------------------------------------------------------##
+
+	   ##----------------------------------------------------------------##
+	   ## DROP any outbound traffic to the internal network that is trying to
+	   ## establish a NEW connection.
+		$IPTABLES -A FORWARD -o $INTERNAL -d $INTERNAL_NET \
+			-m state --state NEW -j DROP
+	   ##----------------------------------------------------------------##
+
+	   ##----------------------------------------------------------------##
+	   ## DROP echo reply packets coming into the internal interface.
+		$IPTABLES -A FORWARD -o $INTERNAL -p icmp --icmp-type echo-request \
+			-j DROP
+	   ##----------------------------------------------------------------##
+
+        ##===================================================================##
+
+        ##===================================================================##
+	## Egress Stuff
+
+	   ##----------------------------------------------------------------##
+	   ## Filter out Reserved/Private IP addresses based on Source IP.
+		$IPTABLES -A FORWARD -i $EXTERNAL -j SRC_EGRESS
+
+	   ## Allow connections if they are bound toward the INTERNAL_NET or
+	   ## the DMZ_NET.
+		$IPTABLES -A FORWARD -i $EXTERNAL -d $DMZ_NET -j KEEP_STATE
+		$IPTABLES -A FORWARD -o $EXTERNAL -s $DMZ_NET -j KEEP_STATE
+		$IPTABLES -A FORWARD -i $EXTERNAL -d $INTERNAL_NET -j KEEP_STATE
+		$IPTABLES -A FORWARD -o $EXTERNAL -s $INTERNAL_NET -j KEEP_STATE
+		$IPTABLES -A FORWARD -i $EXTERNAL -d $DMZ_NET -j RETURN
+		$IPTABLES -A FORWARD -o $EXTERNAL -s $DMZ_NET -j RETURN
+		$IPTABLES -A FORWARD -i $EXTERNAL -d $INTERNAL_NET -j RETURN
+		$IPTABLES -A FORWARD -o $EXTERNAL -s $INTERNAL_NET -j RETURN
+
+	   ## Filter out Reserved/Private IP addresses based on destination IP.
+		$IPTABLES -A FORWARD -i $EXTERNAL -j DST_EGRESS
+		$IPTABLES -A FORWARD -o $EXTERNAL -j DST_EGRESS
+		$IPTABLES -A FORWARD -o $EXTERNAL -j SRC_EGRESS
+	   ##----------------------------------------------------------------##
+
+	   ##----------------------------------------------------------------##
+	   ## Filter out Reserved/Private IP addresses based on Destination IP.
+		$IPTABLES -A FORWARD -i $INTERNAL -d ! $DMZ_NET -j DST_EGRESS
+		$IPTABLES -A FORWARD -o $INTERNAL -s ! $DMZ_NET -j SRC_EGRESS
+	   ##----------------------------------------------------------------##
+
+	   ##----------------------------------------------------------------##
+	   ## ACCEPT DMZ to DMZ traffic.
+		$IPTABLES -A FORWARD -i $DMZ_IF -s $DMZ_NET -d $DMZ_NET -j KEEP_STATE
+		$IPTABLES -A FORWARD -o $DMZ_IF -s $DMZ_NET -d $DMZ_NET -j KEEP_STATE
+		$IPTABLES -A FORWARD -i $DMZ_IF -s $DMZ_NET -d $DMZ_NET -j RETURN
+		$IPTABLES -A FORWARD -o $DMZ_IF -s $DMZ_NET -d $DMZ_NET -j RETURN
+
+	   ## Filter out Reserved/Private IP addresses based on Destination IP address.
+		$IPTABLES -A FORWARD -i $DMZ_IF -d ! $INTERNAL_NET -j DST_EGRESS
+		$IPTABLES -A FORWARD -o $DMZ_IF -s ! $INTERNAL_NET -j SRC_EGRESS
+	   ##----------------------------------------------------------------##
+
+
+	## End Egress Stuff ##
+        ##===================================================================##
+
+        ##===================================================================##
+	## ACCEPT some stuff.
+
+	## Basic State Based Rules.
+		$IPTABLES -A FORWARD -j KEEP_STATE
+
+	## Accept outgoing packets establishing a NEW connection.
+		$IPTABLES -A FORWARD -o $EXTERNAL -m state --state NEW -j ACCEPT
+
+	## Jump to ALLOW_ICMP for general rules relating to the ICMP protocol.
+		$IPTABLES -A FORWARD -p icmp -j ALLOW_ICMP
+        ##===================================================================##
+
+
+   ## End FORWARD Chain Rules ##
+   ##========================================================================##
+
+
+### END FIREWALL RULES ###
+
+
+
+##------------------------------------------------------------------------##
+## I generally prefer to keep the NAT stuff in a separate file called     ##
+## rc.firewall.nat, which is why alot of these variables are declared     ##
+## again here, but that's just me.                                        ##
+##------------------------------------------------------------------------##
+
+###############################################################################
+## IPTABLES Network Address Translation(NAT) Rules
+###############################################################################
+
+## Variables ##
+#IPTABLES="/usr/local/sbin/iptables"
+#EXTERNAL="eth0"			# External Interface
+#INTERNAL="eth1"			# Internal Interface
+#DMZ_IF="eth2"				# DMZ Interface
+
+#INTERNAL_NET="192.168.1.0/24"
+#DMZ_NET="192.168.69.0/24"
+
+#EXT_IP="123.123.123.123"	# IP address of the External Interface.
+#EXT_IP=`ifconfig $EXTERNAL | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+
+## Flush the NAT table.
+#$IPTABLES -F -t nat
+
+
+###############################################################################
+## Destination NAT -- (DNAT)
+
+
+   ##========================================================================##
+   ## "Redirect" packets headed for certain ports on our external interface
+   ## to other machines on the network. (Examples)
+
+      ##------------------------------------------------------------------------##
+      ## SSH
+#	$IPTABLES -t nat -A PREROUTING -i $EXTERNAL -p tcp -d $EXT_IP --dport 22 \
+#		-j DNAT --to-destination 192.168.69.69:22
+      ##------------------------------------------------------------------------##
+
+      ##------------------------------------------------------------------------##
+      ## WWW
+#	$IPTABLES -t nat -A PREROUTING -i $EXTERNAL -p tcp -d $EXT_IP --dport 80 \
+#		-j DNAT --to-destination 192.168.69.69:80
+      ##------------------------------------------------------------------------##
+
+   ##========================================================================##
+
+
+###############################################################################
+## Source NAT -- (SNAT/Masquerading)
+
+     ## Source NAT allows us to "masquerade" our internal machines behind our
+     ## firewall. (Examples)
+
+   ##========================================================================##
+   ## Static IP address ##
+#	$IPTABLES -t nat -A POSTROUTING -o $EXTERNAL -s $INTERNAL_NET \
+#		-j SNAT --to-source $EXT_IP
+
+#	$IPTABLES -t nat -A POSTROUTING -o $EXTERNAL -s $DMZ_NET \
+#		-j SNAT --to-source $EXT_IP
+   ##========================================================================##
+ 
+   ##========================================================================##
+   ## Dynamic IP address ##
+#	$IPTABLES -t nat -A POSTROUTING -o $EXTERNAL -s $INTERNAL_NET \
+#		-j MASQUERADE
+
+#	$IPTABLES -t nat -A POSTROUTING -o $EXTERNAL -s $DMZ_NET \
+#		-j MASQUERADE
+   ##========================================================================##
+
+
+### END NAT RULES ###
+
+
+###############################################################################
+## Additional Kernel Configuration
+###############################################################################
+
+   ## Adjust for your requirements/preferences.
+   ## For more information regarding the options below see the resources
+   ## listed at the top of the script or the Documentation that comes with
+   ## the Linux Kernel source.
+   ## For Example: linux/Documentation/filesystems/proc.txt
+   ##              linux/Documentation/networking/ip-sysctl.txt
+
+   ##========================================================================##
+   ## Set the maximum number of connections to track. (Kernel Default: 2048)
+	if [ -e /proc/sys/net/ipv4/ip_conntrack_max ]; then
+  		echo "4096" > /proc/sys/net/ipv4/ip_conntrack_max
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Local port range for TCP/UDP connections
+	if [ -e /proc/sys/net/ipv4/ip_local_port_range ]; then
+  		echo -e "32768\t61000" > /proc/sys/net/ipv4/ip_local_port_range
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Disable TCP Explicit Congestion Notification Support
+#	if [ -e /proc/sys/net/ipv4/tcp_ecn ]; then
+#		echo "0" > /proc/sys/net/ipv4/tcp_ecn
+#	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Disable source routing of packets
+	if [ -e /proc/sys/net/ipv4/conf/all/accept_source_route ]; then
+		for i in /proc/sys/net/ipv4/conf/*/accept_source_route; do
+  			echo "0" > $i;
+		done
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Enable rp_filter
+	if [ -e /proc/sys/net/ipv4/conf/all/rp_filter ]; then
+		for i in /proc/sys/net/ipv4/conf/*/rp_filter; do
+			echo "1" > $i;
+		done
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Ignore any broadcast icmp echo requests
+	if [ -e /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts ]; then
+		echo "1" > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Ignore all icmp echo requests on all interfaces
+#	if [ -e /proc/sys/net/ipv4/icmp_echo_ignore_all ]; then
+#		echo "0" > /proc/sys/net/ipv4/icmp_echo_ignore_all
+#	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Log packets with impossible addresses to kernel log.
+	if [ -e /proc/sys/net/ipv4/conf/all/log_martians ]; then
+		echo "1" > /proc/sys/net/ipv4/conf/all/log_martians
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Don't accept ICMP redirects
+
+	## Disable on all interfaces
+#	if [ -e /proc/sys/net/ipv4/conf/all/accept_redirects ]; then
+#		echo "0" > /proc/sys/net/ipv4/conf/all/accept_redirects
+#	fi
+
+	## Disable only on the external interface.
+	if [ -e /proc/sys/net/ipv4/conf/$EXTERNAL/accept_redirects ]; then
+		echo "0" > /proc/sys/net/ipv4/conf/$EXTERNAL/accept_redirects
+	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Additional options for dialup connections with a dynamic ip address
+   ## See: linux/Documentation/networking/ip_dynaddr.txt
+#	if [ -e /proc/sys/net/ipv4/ip_dynaddr ]; then
+#		echo "1" > /proc/sys/net/ipv4/ip_dynaddr
+#	fi
+   ##========================================================================##
+
+   ##========================================================================##
+   ## Enable IP Forwarding
+	if [ -e /proc/sys/net/ipv4/ip_forward ]; then
+		echo "1" > /proc/sys/net/ipv4/ip_forward
+	else
+		echo "Uh oh: /proc/sys/net/ipv4/ip_forward does not exist"
+		echo "(That may be a problem)"
+		echo
+	fi
+   ##========================================================================##
+
+
+## EOF ##

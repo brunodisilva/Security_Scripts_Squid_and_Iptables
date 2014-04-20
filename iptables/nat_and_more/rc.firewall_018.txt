@@ -1,0 +1,126 @@
+#!/bin/sh
+# David Wirch (kuma@opensourcedot.com)
+# Janurary 21, 2001 rev. 1 / Modified Feburary 2, 2001
+
+# Location of IPTables
+FW="`whereis -b iptables | cut -d \" \" -f 2`"
+# Interface Configuration
+IF0="eth0"
+IP0="`ifconfig $IF0 | grep inet | cut -d : -f 2 | cut -d \  -f 1`"
+MASK0="`ifconfig $IF0 | grep Mask | cut -d : -f 4`"
+LOCALNET="$IP0"
+echo "IP: $LOCALNET/$MASK0"
+# Inside Interface (Can be either eth1 or none)
+IF1="eth1"
+IP1="`ifconfig $IF1 | grep inet | cut -d : -f 2 | cut -d \  -f 1`"
+MASK1="`ifconfig $IF1 | grep Mask | cut -d : -f 4`"
+GWIP="$IP1"
+echo "LAN Gateway: $GWIP/$MASK1"
+if [ $IF1 != none ]; then
+        LAN="10.0.1.0/24"
+	HOST0="10.0.1.2"
+	HOST1="10.0.1.3"
+fi
+# Everyone
+WORLD="0/0"
+
+# Options
+TOS=no
+ICMP=yes
+
+# Flush
+$FW -F INPUT
+$FW -F OUTPUT
+$FW -F FORWARD
+$FW -F -t nat
+$FW -F -t mangle
+$FW -F LOGDROP
+# Policy
+$FW -P INPUT DROP
+$FW -P OUTPUT ACCEPT
+$FW -P FORWARD ACCEPT
+
+# Create Event Logging
+if [ -z "`iptables -L | grep LOGDROP`" ]; then
+	$FW -N LOGDROP 2>/dev/null
+fi
+$FW -A LOGDROP -p TCP -j LOG --log-level info --log-prefix "TCP Drop "
+$FW -A LOGDROP -p UDP -j LOG --log-level info --log-prefix "UDP Drop "
+$FW -A LOGDROP -p ICMP -j LOG --log-level info --log-prefix "ICMP Drop "
+$FW -A LOGDROP -f -j LOG --log-level emerg --log-prefix "FRAG Drop "
+$FW -A LOGDROP -j DROP
+echo "Event logging added"
+# $FW -A INPUT -i eth0 -j LOG
+# Avoid these from being logged (gets annoying)
+# $FW -A INPUT -s $WORLD -p TCP --sport 6666:7000 -d $LOCALNET -j ACCEPT
+# $FW -A INPUT -s 24.0.0.0/8 -p ALL -d $LOCALNET -j DROP
+
+# LAN Configuration
+# Dynamic IP
+$FW -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+# Static IP
+# $FW -t nat -A POSTROUTING -o $IF0 -s $LAN -j SNAT --to $LOCALNET
+$FW -A FORWARD -o eth0 -j ACCEPT
+$FW -A FORWARD -i eth0 -m state --state ESTABLISHED -j ACCEPT
+$FW -A FORWARD -p TCP -s $WORLD --dport 137:139 -j DROP
+$FW -A FORWARD -p UDP -s $WORLD --sport 137:139 -j DROP
+# $FW -A FORWARD -p TCP --tcp-flags SYN,ACK,FIN,RST RST -m limit --limit 1
+$FW -A INPUT -m state --state ESTABLISHED -j ACCEPT
+# $FW -A OUTPUT -p TCP -s $LAN --syn -j ACCEPT
+$FW -A INPUT -p TCP --tcp-flags ALL SYN,ACK -j ACCEPT
+$FW -P FORWARD DROP
+# Port Forwarding
+
+##### Traffic via LAN
+# $FW -t nat -A POSTROUTING -p TCP -o eth0 -s $LAN --sport 6667:7000 -j SNAT \
+#	--to $LOCALNET:6666-7000
+# FTP
+$FW -t nat -A PREROUTING -d $LOCALNET -p TCP --dport 20 -j DNAT \
+	--to $HOST0:20
+$FW -t nat -A PREROUTING -d $LOCALNET -p TCP --dport 21 -j DNAT \
+	--to $HOST0:21
+# SSH
+$FW -t nat -A PREROUTING -d $LOCALNET -p TCP --dport 22 -j DNAT \
+	--to $HOST0:22
+# Telnet (seperate system)
+$FW -t nat -A PREROUTING -d $LOCALNET -p TCP --dport 23 -j DNAT \
+	--to $HOST1:23
+# WWW
+$FW -t nat -A PREROUTING -d $LOCALNET -p TCP --dport 80 -j DNAT \
+	--to $HOST0:80
+
+# Type Of Services (iptables -m tos -h for information)
+if [ $TOS = yes ]; then
+	$FW -t mangle -A OUTPUT -p TCP --dport 20 -j TOS --set-tos 8
+	$FW -t mangle -A OUTPUT -p TCP --dport 21 -j TOS --set-tos 16
+	$FW -t mangle -A OUTPUT -p TCP --dport 22 -j TOS --set-tos 16
+	$FW -t mangle -A OUTPUT -p TCP --dport 23 -j TOS --set-tos 16
+	$FW -t mangle -A OUTPUT -p TCP --dport 25 -j TOS --set-tos 16
+	$FW -t mangle -A OUTPUT -p TCP --dport 53 -j TOS --set-tos 16
+	$FW -t mangle -A OUTPUT -p TCP --dport 53 -j TOS --set-tos 16
+	$FW -t mangle -A OUTPUT -p TCP --dport 80 -j TOS --set-tos 8
+	##
+	$FW -t mangle -A PREROUTING -p TCP --dport 20 -j TOS --set-tos 8
+	$FW -t mangle -A PREROUTING -p TCP --dport 21 -j TOS --set-tos 16
+	$FW -t mangle -A PREROUTING -p TCP --dport 22 -j TOS --set-tos 16
+	$FW -t mangle -A PREROUTING -p TCP --dport 23 -j TOS --set-tos 16
+	$FW -t mangle -A PREROUTING -p UDP --dport 25 -j TOS --set-tos 16
+	$FW -t mangle -A PREROUTING -p UDP --dport 53 -j TOS --set-tos 16
+	$FW -t mangle -A PREROUTING -p UDP --dport 53 -j TOS --set-tos 16
+	$FW -t mangle -A PREROUTING -p TCP --dport 80 -j TOS --set-tos 8
+fi
+
+# Permit full access from LAN
+$FW -A INPUT -s $LAN -p TCP -d $LOCALNET --dport 20: -j ACCEPT
+$FW -A INPUT -s $LAN -p UDP -d $LOCALNET --sport 20: -j ACCEPT
+$FW -A INPUT -s $LAN -p TCP -d $GWIP --dport 20: -j ACCEPT
+$FW -A INPUT -s $LAN -p UDP -d $GWIP --sport 20: -j ACCEPT
+
+##### Traffic via local system
+# Permit Identd (Local machine)
+$FW -A INPUT -s $WORLD -d $LOCALNET -p TCP --dport 113 -j ACCEPT
+# Permit ICMP response
+if [ $ICMP = yes ]; then
+	$FW -A OUTPUT -s $LOCALNET -d $WORLD -o $IF0 -p ICMP -j ACCEPT
+	$FW -A INPUT  -s $WORLD -d $LOCALNET -i $IF0  -p ICMP -j ACCEPT
+fi

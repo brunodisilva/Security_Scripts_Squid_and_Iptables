@@ -1,0 +1,222 @@
+#!/bin/sh
+
+# make me executable (chmod a+x rc.firewall ) and run me on boot
+
+#
+# djweis@internetsolver.com
+# iptables firewall script
+# this script is meant to be run once per boot
+# the rules will be double added if you try to run it twice
+# if you need to add another rule during runtime, change the
+# -A to a -I to add it to the top of the list of rules
+# if you use -A it will go at the end after the reject rule :-(
+#
+
+
+# interface definitions
+BAD_IFACE=eth0
+
+DMZ_IFACE=eth1
+DMZ_ADDR=x.x.x.96/28
+
+GOOD_IFACE=eth2
+GOOD_ADDR=192.168.1.0/24
+
+MASQ_SERVER=x.x.x.98
+FTP_SERVER=x.x.x.100
+MAIL_SERVER=x.x.x.99
+MAIL_SERVER_INTERNAL=192.168.1.3
+
+# testing
+#set -x
+
+ip route del x.x.x.96/28 dev $BAD_IFACE
+ip route del x.x.x.96/28 dev $DMZ_IFACE
+ip route add x.x.x.97 dev $BAD_IFACE
+ip route add x.x.x.96/28 dev $DMZ_IFACE
+
+# we need proxy arp for the dmz network
+echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
+echo 1 > /proc/sys/net/ipv4/conf/eth1/proxy_arp
+
+# turn on ip forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# turn on antispoofing protection
+for f in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 1 > $f; done
+
+# flush all rules in the filter table
+#iptables -F
+
+# flush built in rules
+iptables -F INPUT
+iptables -F OUTPUT
+iptables -F FORWARD
+
+# deny everything for now
+iptables -A INPUT -j DROP
+iptables -A FORWARD -j DROP
+iptables -A OUTPUT -j DROP
+
+# make the chains to define packet directions
+# bad is the internet, dmz is our dmz, good is our masqed network
+iptables -N good-dmz
+iptables -N bad-dmz
+iptables -N good-bad
+iptables -N dmz-good
+iptables -N dmz-bad
+iptables -N bad-good
+
+iptables -N icmp-acc
+
+# accept related packets
+iptables -A FORWARD -m state --state INVALID -j DROP
+iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+# internal client masqing
+iptables -t nat -A POSTROUTING -s $GOOD_ADDR -o $BAD_IFACE -j SNAT --to $MASQ_SERVER
+# mail server masqing
+iptables -t nat -A PREROUTING -p tcp -d $MAIL_SERVER --dport smtp -j DNAT --to $MAIL_SERVER_INTERNAL:25
+iptables -t nat -A PREROUTING -p tcp -d $MAIL_SERVER --dport http -j DNAT --to $MAIL_SERVER_INTERNAL:80
+iptables -t nat -A PREROUTING -p tcp -d $MAIL_SERVER --dport https -j DNAT --to $MAIL_SERVER_INTERNAL:443
+# to allow the above to work you need something like
+# iptables -A bad-good -p tcp --dport smtp -d $MAIL_SERVER_INTERNAL -j ACCEPT
+
+# set which addresses jump to which chains
+iptables -A FORWARD -s $GOOD_ADDR -o $DMZ_IFACE -j good-dmz
+iptables -A FORWARD -s $GOOD_ADDR -o $BAD_IFACE -j good-bad
+
+iptables -A FORWARD -s $DMZ_ADDR -i $DMZ_IFACE -o $BAD_IFACE -j dmz-bad
+iptables -A FORWARD -s $DMZ_ADDR -i $DMZ_IFACE -o $GOOD_IFACE -j dmz-good
+
+iptables -A FORWARD -o $DMZ_IFACE -j bad-dmz
+iptables -A FORWARD -o $GOOD_IFACE -j bad-good
+
+# drop anything that doesn't fit these
+iptables -A FORWARD -j LOG --log-prefix "chain-jump "
+iptables -A FORWARD -j DROP
+
+# icmp acceptance
+iptables -A icmp-acc -p icmp --icmp-type destination-unreachable -j ACCEPT
+iptables -A icmp-acc -p icmp --icmp-type source-quench -j ACCEPT
+iptables -A icmp-acc -p icmp --icmp-type time-exceeded -j ACCEPT
+iptables -A icmp-acc -p icmp --icmp-type echo-request -j ACCEPT
+iptables -A icmp-acc -p icmp --icmp-type echo-reply -j ACCEPT
+# iptables -A icmp-acc -j LOG --log-prefix "icmp-acc "
+iptables -A icmp-acc -j DROP
+
+# from internal to dmz
+iptables -A good-dmz -p tcp --dport smtp -j ACCEPT
+iptables -A good-dmz -p tcp --dport pop3 -j ACCEPT
+iptables -A good-dmz -p udp --dport domain -j ACCEPT
+iptables -A good-dmz -p tcp --dport domain -j ACCEPT
+iptables -A good-dmz -p tcp --dport www -j ACCEPT
+iptables -A good-dmz -p tcp --dport https -j ACCEPT
+iptables -A good-dmz -p tcp --dport ssh -j ACCEPT
+iptables -A good-dmz -p tcp --dport telnet -j ACCEPT
+iptables -A good-dmz -p tcp --dport auth -j ACCEPT
+iptables -A good-dmz -p tcp --dport ftp -j ACCEPT
+iptables -A good-dmz -p tcp --dport 1521 -j ACCEPT
+iptables -A good-dmz -p icmp -j icmp-acc
+iptables -A good-dmz -j LOG --log-prefix "good-dmz "
+iptables -A good-dmz -j DROP
+
+# from external to dmz
+iptables -A bad-dmz -p tcp --dport smtp -j ACCEPT
+iptables -A bad-dmz -p udp --dport domain -j ACCEPT
+iptables -A bad-dmz -p tcp --dport domain -j ACCEPT
+iptables -A bad-dmz -p tcp --dport www -j ACCEPT
+iptables -A bad-dmz -p tcp --dport https -j ACCEPT
+iptables -A bad-dmz -p tcp --dport ssh -j ACCEPT
+iptables -A bad-dmz -p tcp -d $FTP_SERVER --dport ftp -j ACCEPT
+iptables -A bad-dmz -p icmp -j icmp-acc
+iptables -A bad-dmz -j LOG --log-prefix "bad-dmz "
+iptables -A bad-dmz -j DROP
+
+# from internal to external
+iptables -A good-bad -j ACCEPT
+# iptables -t nat -A POSTROUTING -o $BAD_IFACE -j SNAT --to $MASQ_SERVER
+#iptables -A good-bad -p tcp -j MASQ
+#iptables -A good-bad -p udp -j MASQ
+#iptables -A good-bad -p icmp -j MASQ
+#ipchains -A good-bad -p tcp --dport www -j MASQ
+#ipchains -A good-bad -p tcp --dport ssh -j MASQ
+#ipchains -A good-bad -p udp --dport 33434:33500 -j MASQ
+#ipchains -A good-bad -p tcp --dport ftp -j MASQ
+#ipchains -A good-bad -p icmp --icmp-type ping -j MASQ
+#ipchains -A good-bad -j REJECT -l
+
+# from dmz to internal
+# iptables -A dmz-good -p tcp ! --syn --sport smtp -j ACCEPT
+iptables -A dmz-good -p tcp --dport smtp -j ACCEPT
+iptables -A dmz-good -p tcp --sport smtp -j ACCEPT
+iptables -A dmz-good -p udp --sport domain -j ACCEPT
+iptables -A dmz-good -p tcp ! --syn --sport domain -j ACCEPT
+iptables -A dmz-good -p tcp ! --syn --sport www -j ACCEPT
+iptables -A dmz-good -p tcp ! --syn --sport ssh -j ACCEPT
+iptables -A dmz-good -p tcp -d 192.168.1.34 --dport smtp -j ACCEPT
+iptables -A dmz-good -p icmp -j icmp-acc
+iptables -A dmz-good -j LOG --log-prefix "dmz-good "
+iptables -A dmz-good -j DROP
+
+# from dmz to external
+iptables -A dmz-bad -p tcp --dport smtp -j ACCEPT
+iptables -A dmz-bad -p tcp --sport smtp -j ACCEPT
+iptables -A dmz-bad -p udp --dport domain -j ACCEPT
+iptables -A dmz-bad -p tcp --dport domain -j ACCEPT
+iptables -A dmz-bad -p tcp --dport www -j ACCEPT
+iptables -A dmz-bad -p tcp --dport https -j ACCEPT
+iptables -A dmz-bad -p tcp --dport ssh -j ACCEPT
+iptables -A dmz-bad -p tcp --dport ftp -j ACCEPT
+iptables -A dmz-bad -p tcp --dport whois -j ACCEPT
+iptables -A dmz-bad -p tcp --dport telnet -j ACCEPT
+iptables -A dmz-bad -p udp --dport ntp -j ACCEPT
+# ipchains -A good-bad -p udp --dport 33434:33500 -j MASQ
+iptables -A dmz-bad -p icmp -j icmp-acc
+iptables -A dmz-bad -j LOG --log-prefix "dmz-bad "
+iptables -A dmz-bad -j DROP
+
+# from external to internal
+iptables -A bad-good -p tcp --dport smtp -d $MAIL_SERVER_INTERNAL -j ACCEPT
+iptables -A bad-good -p tcp --dport http -d $MAIL_SERVER_INTERNAL -j ACCEPT
+iptables -A bad-good -p tcp --dport https -d $MAIL_SERVER_INTERNAL -j ACCEPT
+iptables -A bad-good -j LOG --log-prefix "bad-good "
+iptables -A bad-good -j REJECT
+
+# rules for this machine itself
+iptables -N bad-if
+iptables -N dmz-if
+iptables -N good-if
+
+# set up the jumps to each chain
+iptables -A INPUT -i $BAD_IFACE -j bad-if
+iptables -A INPUT -i $DMZ_IFACE -j dmz-if
+iptables -A INPUT -i $GOOD_IFACE -j good-if
+
+# external iface
+iptables -A bad-if -p icmp -j icmp-acc
+iptables -A bad-if -j ACCEPT
+#ipchains -A bad-if -i ! ppp0 -j DENY -l
+#ipchains -A bad-if -p TCP --dport 61000:65095 -j ACCEPT
+#ipchains -A bad-if -p UDP --dport 61000:65095 -j ACCEPT
+#ipchains -A bad-if -p ICMP --icmp-type pong -j ACCEPT
+#ipchains -A bad-if -j icmp-acc
+#ipchains -A bad-if -j DENY
+
+# dmz iface
+iptables -A bad-if -p icmp -j icmp-acc
+iptables -A dmz-if -j ACCEPT
+
+# internal iface
+iptables -A good-if -p tcp --dport ssh -j ACCEPT
+iptables -A good-if -p ICMP --icmp-type ping -j ACCEPT
+iptables -A good-if -p ICMP --icmp-type pong -j ACCEPT
+iptables -A good-if -j icmp-acc
+iptables -A good-if -j DROP
+
+
+# remove the complete blocks
+iptables -D INPUT 1
+iptables -D FORWARD 1
+iptables -D OUTPUT 1
+

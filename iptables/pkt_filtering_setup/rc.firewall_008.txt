@@ -1,0 +1,173 @@
+#! /bin/sh
+# Packet filtering setup script by Anthony C. Zboralski
+# Adapted by Didi Damian for iptables version 1.0.0
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Set up variables
+EXT_IF="eth0"
+INT_IF="eth1"
+EXT_IP=24.x.x.x/32
+INT_IP=192.168.0.1/32
+EXT_NET=24.x.x.0/24
+INT_NET=192.168.0.0/24
+MASQ_NETS="192.168.0.0/24"
+LOCAL_ADDRS="127.0.0.0/8 192.168.0.1/32 24.x.x.x/32"
+MAIL_RELAY=24.x.x.x/32
+SMB_ACCESS="192.168.0.2/32"
+SMB_BCAST="192.168.0.255/32"
+
+# Turn on IP forwarding
+echo Turning on IP forwarding.
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Load the ip_tables module
+echo Loading ip_tables module.
+/sbin/modprobe ip_tables || exit 1 
+# I let the kernel dynamically load the other modules
+
+echo Flush standard tables.
+iptables --flush INPUT
+iptables --flush OUTPUT
+iptables --flush FORWARD
+echo Deny everything until firewall setup is completed.
+iptables --policy INPUT           DROP
+iptables --policy OUTPUT          DROP
+iptables --policy FORWARD         DROP
+
+CHAINS=`iptables -n -L |perl -n -e '/Chain\s+(\S+)/ && !($1 =~ /^(INPUT|FORWARD|OUTPUT)$/) && print "$1 "'`
+echo Remove remaining chains:
+echo   $CHAINS
+for chain in $CHAINS; do
+	iptables --flush $chain
+done
+# 2nd step cause of dependencies
+for chain in $CHAINS; do
+	iptables --delete-chain $chain
+done
+
+for net in $MASQ_NETS; do
+  # I delete all the rules so you can rerun the scripts without bloating
+  # your nat entries.
+  	iptables -D POSTROUTING -t nat -s $MASQ_NETS -j MASQUERADE 2>/dev/null
+        iptables -A POSTROUTING -t nat -s $MASQ_NETS -j MASQUERADE || exit 1
+done
+  iptables --policy FORWARD ACCEPT
+
+# Create a target for logging and dropping packets
+iptables --new LDROP 2>/dev/null
+iptables -A LDROP --proto tcp -j LOG --log-level info \
+                                           --log-prefix "TCP Drop "
+iptables -A LDROP --proto udp -j LOG --log-level info \
+                                           --log-prefix "UDP Drop "
+iptables -A LDROP --proto icmp -j LOG --log-level info \
+                                           --log-prefix "ICMP Drop "
+iptables -A LDROP --proto gre -j LOG --log-level info \
+                                           --log-prefix "GRE Drop "
+
+iptables -A LDROP -f -j LOG --log-level emerg \
+                                  --log-prefix "FRAG Drop "
+iptables -A LDROP -j DROP
+
+# Create a table for watching some accepting rules
+iptables --new WATCH 2>/dev/null
+iptables -A WATCH -m limit -j LOG --log-level warn --log-prefix "ACCEPT "
+iptables -A WATCH -j ACCEPT
+
+
+echo Special target for local addresses:
+iptables --new LOCAL 2>/dev/null
+echo  $LOCAL_ADDRS
+for ip in $LOCAL_ADDRS; do
+  iptables -A INPUT --dst $ip -j LOCAL
+#  iptables -A INPUT --src $ip -i ! lo -j LDROP # lame spoof protect
+done
+echo Authorize mail from mail relay.
+iptables -A LOCAL --proto tcp --syn --src $MAIL_RELAY --dst $EXT_IP --dport 25 -j ACCEPT
+
+
+echo Authorizing samba access to:
+echo   $SMB_ACCESS
+iptables --new SMB 2>/dev/null
+for ip in $SMB_ACCESS; do
+  iptables -A SMB -s $ip -j ACCEPT
+done
+iptables -A LOCAL --proto udp -i ! $EXT_IF --dport 135:139 -j SMB
+iptables -A LOCAL --proto tcp -i ! $EXT_IF --dport 135:139 -j SMB
+iptables -A LOCAL --proto tcp -i ! $EXT_IF --dport 445 -j SMB
+iptables -A INPUT -i ! $EXT_IF --dst $SMB_BCAST -j ACCEPT #lame samba broadcast
+
+echo Drop and log every other incoming tcp connection attempts.
+iptables -A LOCAL -i ! lo --proto tcp --syn --j LDROP
+
+echo Authorize dns access for local nets.
+for net in $MASQ_NETS 127.0.0.0/8; do
+  iptables -A INPUT --proto udp --src $net --dport 53 -j ACCEPT
+done
+
+
+echo Enforcing up ICMP policies, use iptables -L ICMP to check.
+# If you deny all ICMP messages you head for trouble since it would
+# break lots of tcp/ip algorythm (acz)
+iptables --new ICMP 2>/dev/null
+iptables -A INPUT --proto icmp -j ICMP
+iptables -A ICMP -p icmp --icmp-type echo-reply                   -j ACCEPT
+iptables -A ICMP -p icmp --icmp-type destination-unreachable      -j WATCH
+iptables -A ICMP -p icmp --icmp-type   network-unreachable        -j WATCH
+iptables -A ICMP -p icmp --icmp-type   host-unreachable           -j WATCH
+iptables -A ICMP -p icmp --icmp-type   protocol-unreachable       -j WATCH
+iptables -A ICMP -p icmp --icmp-type   port-unreachable           -j ACCEPT
+iptables -A ICMP -p icmp --icmp-type   fragmentation-needed       -j LDROP 
+iptables -A ICMP -p icmp --icmp-type   source-route-failed        -j WATCH 
+iptables -A ICMP -p icmp --icmp-type   network-unknown            -j WATCH
+iptables -A ICMP -p icmp --icmp-type   host-unknown               -j WATCH
+iptables -A ICMP -p icmp --icmp-type   network-prohibited         -j WATCH 
+iptables -A ICMP -p icmp --icmp-type   host-prohibited            -j WATCH
+iptables -A ICMP -p icmp --icmp-type   TOS-network-unreachable    -j WATCH
+iptables -A ICMP -p icmp --icmp-type   TOS-host-unreachable       -j WATCH
+iptables -A ICMP -p icmp --icmp-type   communication-prohibited   -j WATCH 
+iptables -A ICMP -p icmp --icmp-type   host-precedence-violation  -j LDROP   
+iptables -A ICMP -p icmp --icmp-type   precedence-cutoff          -j LDROP   
+iptables -A ICMP -p icmp --icmp-type source-quench                -j LDROP   
+iptables -A ICMP -p icmp --icmp-type redirect                     -j LDROP   
+iptables -A ICMP -p icmp --icmp-type   network-redirect           -j LDROP   
+iptables -A ICMP -p icmp --icmp-type   host-redirect              -j LDROP   
+iptables -A ICMP -p icmp --icmp-type   TOS-network-redirect       -j LDROP   
+iptables -A ICMP -p icmp --icmp-type   TOS-host-redirect          -j LDROP   
+iptables -A ICMP -p icmp --icmp-type echo-request                 -j WATCH
+iptables -A ICMP -p icmp --icmp-type router-advertisement         -j LDROP   
+iptables -A ICMP -p icmp --icmp-type router-solicitation          -j LDROP   
+iptables -A ICMP -p icmp --icmp-type time-exceeded                -j WATCH
+iptables -A ICMP -p icmp --icmp-type   ttl-zero-during-transit    -j WATCH 
+iptables -A ICMP -p icmp --icmp-type   ttl-zero-during-reassembly -j WATCH 
+iptables -A ICMP -p icmp --icmp-type parameter-problem            -j WATCH 
+iptables -A ICMP -p icmp --icmp-type   ip-header-bad              -j WATCH 
+iptables -A ICMP -p icmp --icmp-type   required-option-missing    -j WATCH 
+iptables -A ICMP -p icmp --icmp-type timestamp-request            -j LDROP   
+iptables -A ICMP -p icmp --icmp-type timestamp-reply              -j LDROP   
+iptables -A ICMP -p icmp --icmp-type address-mask-request         -j LDROP   
+iptables -A ICMP -p icmp --icmp-type address-mask-reply           -j LDROP   
+iptables -A ICMP -p icmp -j LDROP   
+
+echo Authorize tcp traffic.
+iptables -A INPUT --proto tcp -j ACCEPT
+
+echo Authorize packet output.
+iptables --policy OUTPUT ACCEPT
+
+#echo reject ident if you drop em you gotta wait for timeout
+#iptables -I LOCAL --proto tcp --syn --dst $EXT_IP --dport 113 -j REJECT
+
+echo Drop and log all udp below 1024.
+iptables -A INPUT -i ! lo --proto udp --dport :1023 -j LDROP
+
+echo Drop rpc dynamic udp port:
+RPC_UDP=`rpcinfo -p localhost|perl -n -e '/.*udp\s+(\d+)\s+/ && print $1,"\n"'|sort -u`
+echo $RPC_UDP
+for port in $RPC_UDP; do
+  iptables -A LOCAL -i ! lo --proto udp --dport $port -j LDROP
+done
+
+echo Authorize udp above 1024.
+iptables -A INPUT --proto udp --dport 1024: -j ACCEPT
+

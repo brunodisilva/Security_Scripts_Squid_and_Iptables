@@ -1,0 +1,70 @@
+# http://uyema.net/2.4firewall.sh.txt
+#
+#!/bin/sh
+# this script assume all iptables features are compiled
+# statically in the kernel, or all modules are loaded.
+# Otherwise you may encounter some surprises trying to
+# utilize the more featureful and creative commandlines
+# that I've come up with.
+
+#external and internal interfaces
+EXT=eth0
+INT=eth1
+
+# clear everything, and create my cascading chains
+iptables -F
+iptables -N e0
+iptables -N tcpin
+iptables -N udpin
+
+# e0 is the name of our chain for eth0
+iptables -I INPUT -i $EXT -j e0
+
+# OUTPUT Chain
+iptables -A OUTPUT -o $EXT -j DROP -p icmp --icmp-type ! echo-request 
+
+# remote gnutella queries were really pissing me off one day
+# iptables -A OUTPUT -o $EXT -j DROP -p tcp ! --syn --dport 6346
+# iptables -A OUTPUT -o $EXT -j DROP -p tcp ! --syn --sport 6346
+
+# $EXT Chain
+# a single rule to accept SYN Packets for multiple ports (up to 15)
+iptables -A tcpin -j ACCEPT -p tcp --syn -m multiport --destination-ports 873,993,995,143,80,113,21,22,23,25,53
+
+# stateful connection tracking is wonderful stuff
+# ESTABLISHED tcp connections are let through
+# If we send a SYN out, the ACK is seen as RELATED
+# then further communication is accepted by the ESTABLISHED rule
+iptables -A e0 -j ACCEPT -m state --state ESTABLISHED
+iptables -A e0 -j ACCEPT -m state --state RELATED
+
+# certain ports I simply DROP
+iptables -A tcpin -j DROP -p tcp --syn -m multiport --destination-ports 6346,139
+
+# UDP rules...
+iptables -A udpin -j DROP -p udp -m multiport --destination-ports 137,27960
+
+# I run a DNS server, so we must accept UDP packets on port 53
+iptables -A udpin -j ACCEPT -p udp -m state --state NEW --destination-port 53
+
+# let's log NEW udp packets on ports 1024:65535, then let them through
+iptables -A udpin -j LOG -p udp -m state --state NEW --destination-port 1024:65535 --log-level debug --log-prefix UDPNEW\  --log-ip-options
+iptables -A udpin -j ACCEPT -p udp -m state --state NEW --destination-port 1024:65535
+
+# let's log NEW tcp packets on ports 1024:65535, then let them through
+iptables -A tcpin -j LOG -p tcp --syn --destination-port 1024:65535 --log-level debug --log-prefix TCPNEW\  --log-tcp-options --log-ip-options
+iptables -A tcpin -j ACCEPT -p tcp --syn --destination-port 1024:65535
+
+# let's log INVALID or NEW tcp packets on priveleged ports, then DROP
+# (remember I have certain ACCEPT rules higher up the chain)
+iptables -A tcpin -j LOG -p tcp -m state --state INVALID,NEW --destination-port 1:1023 --log-level warn --log-prefix TCPPRIV\  --log-tcp-options --log-ip-options
+iptables -A tcpin -j DROP -p tcp -m state --state INVALID,NEW --destination-port 1:1023
+
+iptables -A e0 -p tcp -j tcpin
+iptables -A e0 -p udp -j udpin
+iptables -A e0 -j LOG --log-level debug --log-prefix NETFILTER\  --log-ip-options  -m state --state INVALID,NEW
+iptables -A e0 -j DROP
+
+# NAT Rules
+# I run a web server inside...
+iptables -t nat -A PREROUTING -p tcp -i eth0 --dport 80 -j DNAT --to-destination 192.168.1.4:80

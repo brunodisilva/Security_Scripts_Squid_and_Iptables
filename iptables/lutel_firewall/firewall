@@ -1,0 +1,1221 @@
+#========================  Lutel Firewall Script 0.72 ========================#
+#  Description:  IPtables firewall Script prepared by Tomasz Lutelmowski      #
+#									      #
+#  Homepage:	 http://firewall.lutel.pl				      #
+#  Subscription: http://freshmeat.net/lutelfirewall			      #
+#  Quickstart:	 Use "./firewall config" to look at current configuration     #
+#		 and edit "CONFIGURATION" section to suit your needs	      #
+#  If you have any suggestions, please email me <tomek@energoprojekt.pl>      #
+#  chkconfig: 2345 11 91						      #
+#=============================================================================#
+
+#=============================== CONFIGURATION ===============================#
+
+# INTERFACE SETTINGS
+# ife - Interface connected to internet, eg. "ppp0" or "eth0" or "eth0:1"
+#       You can set many external interfaces, but only one per script instance.
+# ifi - List of LAN interfaces, for example "eth1" or "eth1 eth2 eth2:0".
+#	You can leave empty if you are setting workstation firewall.
+# Type ifconfig on your console if you want to know what interfaces are up.
+
+ife="eth0"
+ifi="eth1"
+
+# MASQUERADE SETTINGS
+# masquerade - List of interfaces connected to subnets we want to masquerade.
+# 	       Each one must be present in ifi list ($ifi = all subnets)
+#	       Use: masquerade="interface1 interface2 ..."
+#              Default: $ifi (masquerade all LAN clients)
+# masq2ports - This specifies a range of source ports to use, overriding
+#	       the default SNAT port-selection heuristics (man iptables)
+#	       Use: masq2ports="port[-port]"
+#              Default: "" (standard heuristics)
+# nataftstop - NAT (masquerade and DNAT) state atfer ./firewall stop
+#	       Use: nataftstop="on|off"
+#	       Default: "off"
+
+masquerade=$ifi
+masq2ports=""
+nataftstop="off"
+
+# TRAFFIC POLICY
+# hs2lc[x] - Local services available to network clients connected to x+1'th
+#	     interface from ifi list. Eg. hs2lc[0]="22 80" allow lan clients
+#	     behind first interface from ifi list to connect to SSH and WWW
+#	     servers on our box. See SERVICES below for services definitions.
+# hc2ls[x] - LAN machines services available to our box (safe is "all")
+# hs2ic    - Our box services available to internet (at external interface)
+# hc2is    - Internet services available to box (quite safe is "all")
+# l2i[x]   - Internet services available to LAN clients connected to x'th
+#	   - interface (via masquerade)
+# ftp_type - active|passive|both - supported FTP connections, default is both
+# lans_ife - "on" allows LAN clients to connect to $hs2lc services via $ife
+#
+# NOTES:
+# use "all" in port list to specify all services
+# use acl[n-1] for nth interface in $ifi (ex acl[2] is third if from ifi)
+# use acl[n]="" to disable any services for acl[n]
+# You can use range of ports like "6667:6669"
+#
+# EXAMPLE:
+# hs2lc[0]="20 21 22 53 67 80 137 138 139 8080"
+# hc2ls[0]="137 138 139 445"
+# hs2ic="20 21 22"
+# hc2is="20 21 22 25 37 53 80 110 137 139 443 995 3130 8080"
+# l2i[0]="20 21 22 25 80 110 119 411 412 995 6667"
+
+ftp_type="both"
+lans_ife="off"
+
+# RESTRICTIONS AND LIMITS
+# subnets_routing - If you for ex. want to turn on traffic between subnets at
+#		    eth1 and eth1:1 use "eth1 eth1:1". Routing between subnets
+#                   is disabled by default.
+# length_check	  - Setting this to on will match length of packet
+#		    (defined in SERVICES). Requires length module.
+# owner_check	  - If you want to parse packets against its process owner
+#		    set this to "on" and edit SERVICES accordingly.
+# rate_check	  - Setting this to on can prevent some SYN floods and
+#		    other DOS attacks. Requires limit module.
+# unclean_check   - Recommended setting is "on", this attempts to drop packets
+#		    which seem malformed or unusual
+# xxx_rate_limit  - Set maximum rate of incoming and outgoing packets for
+#		    xxx protocol.
+# dos_protect	  - "on" reduces DoS attacks ability by reducing TCP timeouts.
+# ecn		  - "on" enables ECN (Explicit Congestion Notification)
+# iana_check	  - "on" drops incoming packets with classes reserved by IANA.
+# stateful_check  - "on" checks connection tracking state for TCP packets.
+# multicasts	  - "off" drops all incoming multicasts packets (224/8 class)
+# max_packet_size - Any value forces MSS of all TCP packets except localhost
+#		    to be max_packet_size-40. Requires TCPMSS module support.
+# icmp_allow_XXX  - List of types/codes of ICMP packets we accept, where XXX
+#		    must be incoming, forwarding or outgoing.
+#		    Valid ICMP types:
+# 			0	echo-reply (pong)
+#			3	destination-unreachable
+#			3/0	   network-unreachable
+#			3/1	   host-unreachable
+#			3/2	   protocol-unreachable
+#			3/3	   port-unreachable
+#			3/4	   fragmentation-needed
+#			3/5	   source-route-failed
+#			3/6	   network-unknown
+#			3/7	   host-unknown
+#			3/8	   network-prohibited
+#			3/9	   host-prohibited
+#			3/11	   TOS-network-unreachable
+#			3/12	   TOS-host-unreachable
+#			3/13	   communication-prohibited
+#			3/14	   host-precedence-violation
+#			3/15	   precedence-cutoff
+#			4	source-quench
+#			5	redirect
+#			5/0	   network-redirect
+#			5/1	   host-redirect
+#			5/2	   TOS-network-redirect
+#			5/3	   TOS-host-redirect
+#			8	echo-request (ping)
+#			9	router-advertisement
+#			10	router-solicitation
+#			11	time-exceeded (ttl-exceeded)
+#			11/0	   ttl-zero-during-transit
+#			11/1	   ttl-zero-during-reassembly
+#			12	parameter-problem
+#			12/0	   ip-header-bad
+#			12/1	   required-option-missing
+#			13	timestamp-request
+#			14	timestamp-reply
+#			15	address-mask-request
+#			16	address-mask-reply
+
+subnets_routing=""
+length_check="on"
+owner_check="off"
+rate_check="on"
+unclean_check="on"
+tcp_rate_limit="40/s"
+udp_rate_limit="60/s"
+icmp_rate_limit="5/s"
+dos_protect="on"
+ecn="off"
+iana_check="on"
+stateful_check="on"
+multicasts="off"
+max_packet_size=""
+icmp_allow_incoming="0 3/0 3/1 3/3 3/4 3/13 4 8 11"
+icmp_allow_forwarding="3/0 3/1 3/3 3/13 11"
+icmp_allow_outgoing="0 3/0 3/1 3/3 3/4 3/13 4 8 11"
+
+# TRAFFIC OPTIMIZATION AND MANGLING
+# tos_optimizations - This is used to set the 8-bit TOS field in the IP header
+#		      with values defined in SERVICES. Default: off
+# mark_for_shapeing - This is used to set the netfilter mark value associated
+#		      with the value in SERVICES. Useful for traffic shapeing.
+#		      inet<->lan traffic get highest (0-9) priority,
+#		      inet<->box - medium (10-19) and box<->lan - lowest (>20)
+#		      Default: off
+# reject_ports      - Traffic to this port will be rejected instead of dropped
+#		      113 (auth) and 1080,3128,8080 (proxies) by default. This
+#		      can speed up some things.
+# set_ttl	    - Set TTL of forwarded packets to given value. Its helpful
+#		      for setting up "stealth" routers. Example: set_ttl="64".
+#		      This one requires proper patch on IPTables.
+
+tos_optimizations="off"
+mark_for_shapeing="off"
+reject_ports="113 1080 3128 8080"
+set_ttl=""
+
+# TRAFFIC ACCOUNTING
+# ZorbIPTraffic - List of hosts IP's you want to log with ZorbIPTraffic
+# 		  More details at http://www.atout.be/
+
+ZorbIPTraffic=""
+
+# LOGGING SETTINGS
+# logging  - Protocols we want to log (all|tcp|udp|icmp|none). Default is all.
+# loglevel - Level of logging (numeric or see syslog.conf(5)), empty = warn
+# lograte  - Maximum logging rate (eg. 5/s)
+# detailed - Set to "yes" to log TCP and IP options of dropped packets
+# droplogs - "source_addr[:source_port]-dest_addr[:dest_port]". For example, to
+# 	     disable all dhcp logs use "0/0:67-0/0:68 0/0:68-0/0:67", other
+#	     examples: "10.0.0.5-0/0:1024:", "10/8:1024:-0/0" etc...
+
+logging="all"
+loglevel="info"
+lograte="2/s"
+detailed="no"
+droplogs=""
+
+# NAT
+# dnat   - "source-destination-redirect", ex. to redirect WWW traffic incoming
+#          to 63.4.1.5 to 10.0.0.5, use: "0/0:1024:-63.4.1.5:80-10.0.0.5:80",
+#          to redirect all traffic - "0/0:1024:-63.4.1.5:-10.0.0.5:"
+#          You can use interface names. Ex. "0/0:1024:-eth0:80-10.0.0.1:80"
+#          You can define multiple redirections separated by space.
+# tproxy - Set to port of your proxy server, to enable transparent proxy. You
+#          have to configure your proxy server also.
+
+tproxy=""
+dnat=""
+
+# SERVICES DEFINITIONS
+# format is: s[port]="name,protocol,remote port,uid,gid,limit_rate,limit_rate_m, length, tos"
+# name  	- name of service
+# protocol	- tcp|udp|tcpudp
+# remote port	- 0...65553|0...65535:|:0...65535|0...65535:0...65535
+# uid		- uid of process owner (can be omitted)
+# gid		- gid of process owner (can be omitted)
+# limit_rate	- how much packets per second are allowed (can be omitted)
+#		  for tcp traffic it limit syn's, in other it limits rate
+#		  of initializing packets. Apply to traffic incoming to host
+# limit_rate_m	- as above, but apply only to forwarded (masqueraded) traffic
+# length	- length of packet - can be x, x:x, x:, :x (can be omitted)
+# tos		- Minimize-Delay 16
+#		  Maximize-Throughput 8
+#		  Maximize-Reliability 4
+#		  Minimize-Cost 2
+#		  Normal-Service 0
+# priority	- Mark packet - 1 - highest priority, 10 - lowest priority
+# type		- b - broadcast
+
+s[20]="ftp,tcp,1024:,0,0,5,,8,9,"
+s[21]="ftp,tcp,1024:,0,0,5,,16,5,"
+s[22]="ssh,tcp,1024:,,,5,,16,1,"
+s[23]="telnet,tcp,1024:,,,5,,16,1,"
+s[25]="smtp,tcp,1024:,,,5,,8,5,"
+s[37]="time,tcp,1024:,,,1,,16,1,"
+s[53]="dns,tcpudp,53:,,,10,,2,3,"
+s[67]="dhcp,udp,68,,,5,,16,2,"
+s[80]="http,tcp,1024:,,,30,,8,4,"
+s[110]="pop3,tcp,1024:,,,10,,8,3,"
+s[113]="auth,tcp,1024:,,,5,,16,4,"
+s[119]="news,tcp,1024:,,,5,,8,3,"
+s[137]="netbios,udp,137:,,,50,,8,6,b"
+s[138]="netbios,udp,138,,,40,,8,6,b"
+s[139]="netbios,tcp,1024:,,,5,,8,6,"
+s[143]="imap,tcp,1024:,,,5,,8,3,"
+s[161]="snmp,tcp,1024:,,,5,,16,2,"
+s[389]="ldap,tcp,1024:,,,5,,16,4,"
+s[411]="directconnect,tcp,1024:,,,10,,8,10,"
+s[412]="directconnect,tcpudp,1024:,,,30,,8,10,"
+s[443]="https,tcp,1024:,,,10,,8,4,"
+s[445]="microsoft-ds,tcp,1024:,,,10,,8,5,"
+s[587]="smtp,tcp,1024:,,,5,,8,5," 		# Often used for AUTH SMTP
+s[993]="imaps,tcp,1024:,,,10,,8,3," 		# TLS secured IMAP protocol
+s[995]="pop3s,tcp,1024:,,,10,,8,3,"
+s[1214]="kazaa,tcpudp,1024:,,,5,,8,10,"
+s[1241]="nessus,tcp,1024:,,,5,,16,2,"
+s[1863]="MSN,tcp,1024:,,,5,,16,3,"
+s[3130]="ipc,udp,1024:,,,10,,16,3,"
+s[3306]="mysql,tcp,1024:,,,5,,16,2,"
+s[4000]="diabloII,tcp,1024:,,,10,,16,2,"
+s[5222]="jabber,tcp,1024:,,,10,,8,10,"
+s[5432]="postgres,tcp,1024:,,,5,,16,2,"
+s[5900]="vnc,tcp,1024:,,,5,,16,3,"
+s[6112]="diabloII,tcpudp,1024:,,,10,,16,2,"
+s[6666]="irc,tcp,1024:,,,5,,16,3,"
+s[6667]="irc,tcp,1024:,,,5,,16,3,"
+s[6668]="irc,tcp,1024:,,,5,,16,3,"
+s[8080]="webcache,tcp,1024:,,,50,,8,6,"
+s[10000]="webmin,tcp,1024:,,,5,,16,2,"
+
+# other - non standard, like www chats, your hidden services etc.
+s[1550]="gadu-gadu,tcp,1024:,,,10,,8,4,"
+s[8074]="gadu-gadu,tcp,1024:,,,10,,16,3,"
+
+# default setting for other services (which are not set above)
+s[0]="unknown,tcpudp,1024:,,,5,,0,10,"
+# default setting if range of ports is used instead of singe port
+s[65535]="range,tcpudp,,,,5,,0,10,"
+
+#=========================== END OF CONFIGURATION ============================#
+
+uidcheck () {
+
+ # first of all, we check our uid
+ if [ `id -u` -ne 0 ]; then
+  echo -e "Error: You must be root to run this script."
+  exit 1
+ fi;
+
+ # ensure script permissions are secure
+ /bin/chmod 0700 $0 2>/dev/null
+ /bin/chown 0:0 $0 2>/dev/null
+
+}
+
+modprobe () {
+
+ # load only nessecary modules
+ if [ -f /lib/modules/`uname -r`/kernel/net/ipv4/netfilter/ip_tables.o ]; then
+  /sbin/modprobe ip_tables 2>/dev/null
+  /sbin/modprobe iptable_filter 2>/dev/null
+  [ "$stateful_check" = "on" ] && /sbin/modprobe ipt_state 2>/dev/null
+  [ "$unclean_check" = "on" ] && /sbin/modprobe ipt_unclean 2>/dev/null
+  if [ "`echo $allservices | grep -E '\<21\>|\<6667\>'`" ]; then
+   /sbin/modprobe ip_conntrack 2>/dev/null
+   if [ "`echo $allservices | grep '\<21\>'`" ]; then
+    /sbin/modprobe ip_conntrack_ftp 2>/dev/null
+    /sbin/modprobe ip_nat_ftp 2>/dev/null
+   fi;
+   if [ "`echo $allservices | grep '\<6667\>'`" ]; then
+    /sbin/modprobe ip_conntrack_irc 2>/dev/null
+    /sbin/modprobe ip_nat_irc 2>/dev/null
+   fi;
+  fi;
+  [ "$dnat" ] &&  /sbin/modprobe iptable_nat 2>/dev/null
+  [ "$tproxy" ] && /sbin/modprobe ipt_REDIRECT 2>/dev/null
+  [ "$logging" != "none" ] && /sbin/modprobe ipt_LOG 2>/dev/null
+  [ "$tos_optimizations" = "on" -o "$mark_for_shapeing" = "on" -o "$set_ttl" ] && /sbin/modprobe iptable_mangle 2>/dev/null
+  [ "$tos_optimizations" = "on" ] && /sbin/modprobe ipt_TOS 2>/dev/null
+  [ "$mark_for_shapeing" = "on" ] && /sbin/modprobe ipt_MARK 2>/dev/null
+  [ "$masquerade" ] && /sbin/modprobe ipt_MASQUERADE 2>/dev/null
+  [ "$reject_ports" ] && /sbin/modprobe ipt_REJECT 2>/dev/null
+  [ "$owner_check" = "on" ] && /sbin/modprobe ipt_owner 2>/dev/null
+  [ "$length_check" = "on" ] && /sbin/modprobe ipt_length 2>/dev/null
+  [ "$rate_check" = "on" ] && /sbin/modprobe ipt_limit 2>/dev/null
+  [ "$max_packet_size" ] && /sbin/modprobe ipt_tcpmss.o 2>/dev/null
+ fi
+
+}
+
+sysctl () {
+
+ # turns on packet forwarding if we do masquerade
+ [ "$masquerade" ] && echo 1 2>/dev/null > /proc/sys/net/ipv4/ip_forward
+
+ echo 0 2>/dev/null > /proc/sys/net/ipv4/tcp_timestamps
+ echo 1 2>/dev/null > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+ echo 1 2>/dev/null > /proc/sys/net/ipv4/icmp_ignore_bogus_error_responses
+ echo 1 2>/dev/null > /proc/sys/net/ipv4/conf/all/rp_filter
+ echo 0 2>/dev/null > /proc/sys/net/ipv4/conf/all/accept_redirects
+ echo 0 2>/dev/null > /proc/sys/net/ipv4/conf/all/accept_source_route
+ echo 0 2>/dev/null > /proc/sys/net/ipv4/conf/all/send_redirects
+ echo 0 2>/dev/null > /proc/sys/net/ipv4/conf/all/bootp_relay
+ echo 1 2>/dev/null > /proc/sys/net/ipv4/conf/all/log_martians
+ echo 1 2>/dev/null > /proc/sys/net/ipv4/tcp_syncookies
+
+ # Explicit Congestion Notification support
+ [ "$ecn" = "on" ] && echo 1 2>/dev/null > /proc/sys/net/ipv4/tcp_ecn
+
+ # reduce DOS ability
+ if [ "$dos_protect" = "on" ]; then
+  echo 1800 2>/dev/null > /proc/sys/net/ipv4/tcp_keepalive_time
+  echo 30 2>/dev/null > /proc/sys/net/ipv4/tcp_fin_timeout
+  echo 0 2>/dev/null > /proc/sys/net/ipv4/tcp_window_scaling
+  echo 0 2>/dev/null > /proc/sys/net/ipv4/tcp_sack
+ fi
+
+}
+
+paths () {
+
+ export LC_ALL=C
+ export PATH=$PATH"/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
+ T=`which iptables`
+
+}
+
+init () {
+
+ if [ ! "$ife" ]; then
+  echo -e "Error: External interface not defined, please edit $0 script"
+  exit 1
+ fi;
+
+
+ if=`ifconfig $ife 2>/dev/null | grep 'inet ' | sed s/[[:alpha:]:]//g | gawk '{ print $1"/"$3" "$2 }'`
+ if [ ! "$if" ]; then
+  echo -e "Error: Interface $ife is down - failed to initialize"
+  exit 1
+ fi;
+
+ ip_int=`echo $if | cut -f1 -d'/'`
+ ip_bc=`echo $if | cut -f2 -d' '`
+ ip_net=`echo $if | cut -f1 -d' '`
+
+ ife2=`echo $ife | cut -f1 -d:` # cut off alias
+
+ declare -i c=0
+ for i in $ifi; do
+  if=`ifconfig $i 2>/dev/null | grep 'inet ' | sed s/[[:alpha:]:]//g | gawk '{ print $1"/"$3" "$2 }'`
+  if [ ! "$if" ]; then
+   echo -e "Error: Interface $i is down - failed to initialize"
+   exit 1
+  fi;
+  lan_if_ip[$c]=`echo $if | cut -f1 -d'/'`
+  lan_if_bc[$c]=`echo $if | cut -f2 -d' '`
+  local_net[$c]=`echo $if | cut -f1 -d' '`
+  ((c=c+1))
+ done;
+
+ [ "$logging" != "all" -a "$logging" != "none" ] && logging="-p "$logging
+ [ "$logging" = "all" ] && logging=""
+ [ "$loglevel" ] && ll="--log-level $loglevel"
+ [ "$detailed" = "yes" ] && dl="--log-ip-options --log-tcp-options"
+ if [ "$stateful_check" = "on" ]; then
+  state_new="-m state --state NEW"
+  state_established="-m state --state ESTABLISHED"
+  state_related="-m state --state RELATED"
+  state_invalid="-m state --state INVALID"
+ fi;
+
+ for pf in $dnat; do
+  dnatservices="$dnatservices `echo $pf | cut -f3 -d- | cut -f2 -d:`"
+ done
+ allservices=`for sc in \`echo "${hs2lc[*]} ${hc2ls[*]} $hs2ic $hc2is ${l2i[*]} $dnatservices"\`; do echo $sc; done | sort -u`
+
+}
+
+check () {
+
+ # IPTables checks...
+ if  [ "`$T -N test 2>&1`" ]; then
+  echo -e "\nError: IPtables not supported by current kernel."
+  exit 1
+ fi;
+
+ if [ "$masquerade$dnat$tproxy" -o $iana_check="on" ]; then
+  if [ "`$T -t nat -N test 2>&1`" ]; then
+   echo -e "\nWarning: Full NAT not supported. Masquerade, NAT, IANA checks and transparent proxy disabled."
+   masquerade=""
+   dnat=""
+   tproxy=""
+   iana_check="off"
+  fi;
+ fi;
+
+ if [ "$masquerade" ]; then
+  if [ "`$T -t nat -A test -j MASQUERADE 2>&1`" ]; then
+   echo -e "\nWarning: Masquerade not supported, disabled."
+   masquerade=""
+  fi;
+ fi;
+
+ if [ "$dnat" ]; then
+  if [ "`$T -t nat -A test -j DNAT --to-destination 10.0.0.1 2>&1`" ]; then
+   echo -e "\nWarning: DNAT not supported, disabled."
+   dnat=""
+  fi;
+ fi;
+
+ if [ "$tproxy" ]; then
+  if [ "`$T -t nat -A test -p tcp -j REDIRECT --to-ports 80 2>&1`" ]; then
+   echo -e "\nWarning: REDIRECT not supported, transparent proxy disabled."
+   tproxy=""
+  fi;
+ fi;
+
+ if [ "$logging" != "none" ]; then
+  if [ "`$T -A test -j LOG 2>&1`" ]; then
+   echo -e "\nWarning: LOG target not supported. Logging disabled."
+   logging="none"
+  fi;
+ fi;
+
+ # If we are stopping, we dont need to check below...
+ if [ "$1" != "stop" ]; then
+
+  if [ "$tos_optimizations" = "on" -o "$mark_for_shapeing" = "on" -o "$set_ttl" ]; then
+   if [ "`$T -N test -t mangle  2>&1`" ]; then
+    echo -e "\nWarning: Packet mangling not supported, TOS and MARK mangling disabled."
+    tos_optimizations="off"
+    mark_for_shapeing="off"
+    set_ttl=""
+   fi;
+  fi;
+
+  if [ "$set_ttl" ]; then
+   if [ "`$T -N test -t mangle -j TTL --ttl-set 64 2>&1`" ]; then
+    echo -e "\nWarning: TTL mangling not supported,  disabled."
+    set_ttl=""
+   fi;
+  fi;
+
+  if [ "$owner_check" = "on" ]; then
+   if [ "`$T -A test -p tcp -m owner --uid-owner=0 -j ACCEPT 2>&1`" ]; then
+    echo -e "\nWarning: Owner module not supported. Owner matching turned off."
+    owner_check="off"
+   fi;
+  fi;
+
+  if [ "$length_check" = "on" ]; then
+   if  [ "`$T -A test -p tcp -m length --length 10:12 -j ACCEPT 2>&1`" ]; then
+    echo -e "\nWarning: Length module not supported. Length restrictions turned off."
+    length_check="off"
+   fi;
+  fi;
+
+  if [ "$rate_check" = "on" ]; then
+   lograte="-m limit --limit $lograte"
+   if  [ "`$T -A test -p tcp -m limit --limit 2/s -j ACCEPT 2>&1`" ]; then
+    echo -e "\nWarning: Limit module not supported. Rate restrictions turned off."
+    rate_check="off"
+    lograte=""
+   fi;
+  else
+   lograte=""
+  fi;
+
+  if [ "$unclean_check" = "on" ]; then
+   if  [ "`$T -A test -m unclean -j DROP 2>&1`" ]; then
+    echo -e "\nWarning: Unclean module not supported. Turn off unclean_check in script or recompile your kernel with unclean module."
+    unclean_check="off"
+   fi;
+  fi;
+
+  if [ "$reject_ports" ]; then
+   if [ "`$T -A test -j REJECT 2>&1`" ]; then
+    echo -e "\nWarning: REJECT target not supported. Using DROP instead of REJECT for $reject_ports"
+    reject_ports=""
+   fi;
+  fi;
+
+  if [ "$max_packet_size" ]; then
+   if [ "`$T -A test -p tcp --tcp-flags ALL SYN --mss 1460 -j ACCEPT 2>&1`" ]; then
+    echo -e "\nWarning: TCPMSS module not supported. Recompile your kernel with TCPMSS module or dont use max_packet_size variable."
+    max_packet_size=""
+   fi;
+  fi;
+
+ fi;
+
+ $T -F test 2>/dev/null
+ $T -X test 2>/dev/null
+ $T -t nat -F test 2>/dev/null
+ $T -t nat -X test 2>/dev/null
+ $T -t mangle -F test 2>/dev/null
+ $T -t mangle -X test 2>/dev/null
+
+ # Services checks...
+ if [ ! "$allservices" ]; then
+  echo -e "\nError: Please set up TRAFFIC POLICY section in $0"
+  exit 1
+ fi;
+
+ for als in `echo $allservices | sed s/'[0-9]*:[0-9]*\|all'//g`; do
+  if [ ! "${s[$als]}" ]; then
+   warnmsg=$warnmsg"$als "
+   s[$als]=${s[0]}
+  fi;
+ done;
+ [ "$warnmsg" ] && echo -e "\nWarning: Service(s) ${warnmsg}not set in SERVICES section, using default setting..."
+
+}
+
+reset () {
+
+ echo -n .
+ for tab in filter nat mangle; do
+  [ "$tab" = "filter" ] && cc="INPUT FORWARD OUTPUT LOG TCP ICMP"
+  [ "$tab" = "nat" ] && cc="PREROUTING POSTROUTING"
+  [ "$tab" = "mangle" ] && cc="PREROUTING POSTROUTING INPUT FORWARD OUTPUT"
+  for chain in $cc; do
+   rules=`$T -t $tab -L $chain -n --line-numbers 2>/dev/null | grep "\-$ife " | cut -f1 -d' '`
+   first=`echo $rules | head -c1`
+   for counter in $rules; do
+    $T -t $tab -D $chain $first 2>/dev/null
+   done
+   $T -t $tab -F $chain-$ife 2>/dev/null
+   $T -t $tab -X $chain-$ife 2>/dev/null
+  done;
+ done;
+
+}
+
+nat () {
+
+ if [ "$masquerade$dnat$tproxy" -o $iana_check="on" ]; then
+
+  $T -t nat -N PREROUTING-$ife
+  $T -t nat -A PREROUTING -i $ife2 -d $ip_int -j PREROUTING-$ife
+  $T -t nat -A PREROUTING -i $ife2 -d 255.255.255.255 -j PREROUTING-$ife
+  c=0
+  for i in $ifi; do
+   i=`echo $i | cut -f1 -d:` # aliases cut off
+   $T -t nat -A PREROUTING -i $i -s ${local_net[$c]} -j PREROUTING-$ife
+  ((c=c+1))
+  done;
+
+  $T -t nat -N POSTROUTING-$ife
+  $T -t nat -A POSTROUTING -o lo -s 127.0.0.0/8 -d 127.0.0.0/8 -j POSTROUTING-$ife
+  $T -t nat -A POSTROUTING -o $ife2 -s $ip_int -j POSTROUTING-$ife
+  c=0
+  for i in $ifi; do
+   i=`echo $i | cut -f1 -d:` # aliases cut off
+   $T -t nat -A POSTROUTING -o $i -d ${local_net[$c]} -j POSTROUTING-$ife
+   $T -t nat -A POSTROUTING -o $ife2 -s ${local_net[$c]} -j POSTROUTING-$ife
+  ((c=c+1))
+  done;
+
+ fi;
+
+ # IANA reserved IPv4 address space, that should never come in from the internet.
+ # You can get fresh list at http://www.iana.org/assignments/ipv4-address-space
+ if [ "$iana_check" != "off" ]; then
+  IANA="0.0.0.0/7 2.0.0.0/8 5.0.0.0/8 7.0.0.0/8 10.0.0.0/8 23.0.0.0/8 27.0.0.0/8 31.0.0.0/8 36.0.0.0/7 39.0.0.0/8 41.0.0.0/8 42.0.0.0/8 49.0.0.0/8 50.0.0.0/8 58.0.0.0/7 70.0.0.0/7 72.0.0.0/5 84.0.0.0/6 88.0.0.0/5 96.0.0.0/3 169.254.0.0/16 172.16.0.0/12 173.0.0.0/8 174.0.0.0/7 176.0.0.0/5 184.0.0.0/6 189.0.0.0/8 190.0.0.0/8 192.0.2.0/24 192.168.0.0/16 197.0.0.0/8 198.18.0.0/15 223.0.0.0/8 224.0.0.0/3"
+
+  # Allow IANA address space in case of external interface is in such class
+  $T -t nat -A PREROUTING-$ife -i $ife2 -s $ip_net -j ACCEPT
+  $T -t nat -A POSTROUTING-$ife -o $ife2 -d $ip_net -j ACCEPT
+
+  # Drop packets coming from IANA addr space
+  for c in $IANA; do
+   if [ "$logging" != "none" ]; then
+    $T -t nat -A PREROUTING-$ife $logging -i $ife2 -s $c $lograte -j LOG --log-prefix="IANA " $ll
+    $T -t nat -A POSTROUTING-$ife $logging -o $ife2 -d $c $lograte -j LOG --log-prefix="IANA " $ll
+   fi;
+   $T -t nat -A PREROUTING-$ife -i $ife2 -s $c -j DROP
+   $T -t nat -A POSTROUTING-$ife -o $ife2 -d $c -j DROP
+  done
+ fi;
+
+ # masquerade
+ for i in $masquerade; do
+  net=`ifconfig $i | grep 'inet ' | gawk '{ print $2"/"$4 }' | sed s/[[:alpha:]:]//g`
+  if [ "$masq2ports" ]; then
+   $T -t nat -A POSTROUTING-$ife -p tcp -o $ife2 -s $net -d ! $net -j MASQUERADE --to-ports=$masq2ports
+   $T -t nat -A POSTROUTING-$ife -p udp -o $ife2 -s $net -d ! $net -j MASQUERADE --to-ports=$masq2ports
+   $T -t nat -A POSTROUTING-$ife -p icmp -o $ife2 -s $net -d ! $net -j MASQUERADE
+  else
+   $T -t nat -A POSTROUTING-$ife -o $ife2 -s $net -d ! $net -j MASQUERADE
+  fi;
+ done
+
+ [ "$tproxy" ] && $T -t nat -A PREROUTING-$ife -i ! $ife2 -p tcp --dport 80 -j REDIRECT --to-ports $tproxy
+
+ for pf in $dnat; do
+  nat_source=`echo $pf | cut -f1 -d-`
+  nat_via=`echo $pf | cut -f2 -d-`
+  nat_dest=`echo $pf | cut -f3 -d-`
+
+  source_ip=`echo $nat_source | cut -f1  -d:`
+  [ "`echo $source_ip | grep \[a-z]`" ] && source_ip=`ifconfig $source_ip | grep 'inet ' | cut -f2 -d: | cut -f1 -d' '`
+  source_pt=`echo $nat_source | cut -f2- -d:`
+
+  via_ip=`echo $nat_via | cut -f1 -d:`
+  [ "`echo $via_ip | grep \[a-z]`" ] && via_ip=`ifconfig $via_ip | grep 'inet ' | cut -f2 -d: | cut -f1 -d' '`
+  via_pt=`echo $nat_via | cut -f2 -d:`
+
+  dest_ip=`echo $nat_dest | cut -f1 -d:`
+  [ "`echo $dest_ip | grep \[a-z]`" ] && dest_ip=`ifconfig $dest_ip | grep 'inet ' | cut -f2 -d: | cut -f1 -d' '`
+  dest_pt=$via_pt #use via port for destination if not supplied
+  dest_pt=`echo $nat_dest | cut -f2 -d:`
+
+  [ "$source_ip" ] && source_ip="-s $source_ip"
+  [ "$source_pt" ] && source_pt="--sport $source_pt"
+  [ "$via_ip" ] && via_ip="-d $via_ip"
+  [ "$via_pt" ] && via_pt="--dport $via_pt"
+  [ "$dest_pt" ] && dest_pt=":$dest_pt"
+
+  $T -t nat -A PREROUTING-$ife -i $ife2 -p tcp $source_ip $source_pt $via_ip $via_pt -j DNAT --to-destination "$dest_ip$dest_pt"
+  $T -t nat -A PREROUTING-$ife -i $ife2 -p udp $source_ip $source_pt $via_ip $via_pt -j DNAT --to-destination "$dest_ip$dest_pt"
+ done
+
+ if [ "$masquerade$dnat$tproxy" -o $iana_check="on" ]; then
+  $T -t nat -A PREROUTING-$ife -j ACCEPT
+  $T -t nat -A POSTROUTING-$ife -j ACCEPT
+ fi;
+
+}
+
+mangle () {
+
+ if [ "$tos_optimizations" = "on" -o "$mark_for_shapeing" = "on" -o "$set_ttl" ]; then
+  $T -t mangle -N PREROUTING-$ife
+  $T -t mangle -N POSTROUTING-$ife
+  $T -t mangle -N INPUT-$ife
+  $T -t mangle -N FORWARD-$ife
+  $T -t mangle -N OUTPUT-$ife
+  $T -t mangle -A PREROUTING -i $ife2 -j PREROUTING-$ife
+  $T -t mangle -A POSTROUTING -o $ife2 -j POSTROUTING-$ife
+  $T -t mangle -A INPUT -i $ife2 -j INPUT-$ife
+  $T -t mangle -A FORWARD -i $ife2 -j FORWARD-$ife
+  $T -t mangle -A FORWARD -o $ife2 -j FORWARD-$ife
+  $T -t mangle -A OUTPUT -o $ife2 -j OUTPUT-$ife
+
+  for p in `echo $allservices | sed s/'[0-9]*:[0-9]*\|all'//g`; do
+   tos=`echo ${s[$p]} | cut -f8 -d,`
+   mrk=`echo ${s[$p]} | cut -f9 -d,`
+   if [ "$tos_optimizations" = "on" -a "$tos" ]; then
+    $T -A PREROUTING-$ife  -t mangle -p tcp --dport $p -j TOS --set-tos $tos
+    $T -A POSTROUTING-$ife -t mangle -p tcp --sport $p -j TOS --set-tos $tos
+   fi;
+   if [ "$mark_for_shapeing" = "on" -a "$mrk" ]; then
+    # Internet <-> Lan traffic (highiest priority) - MARK + 10
+    $T -A FORWARD-$ife -t mangle -i ! $ife2 -o $ife2 -p tcp --dport $p -j MARK --set-mark $mrk
+    $T -A FORWARD-$ife -t mangle -i $ife2 -o ! $ife2 -p tcp --sport $p -j MARK --set-mark $mrk
+    # Internet <-> Box traffic (medium priority) - MARK defined in SERVICES
+    $T -A OUTPUT-$ife -t mangle -o $ife2 -p tcp --dport $p -j MARK --set-mark $(($mrk+10))
+    $T -A INPUT-$ife -t mangle -i $ife2 -p tcp --sport $p -j MARK --set-mark $(($mrk+10))
+    $T -A OUTPUT-$ife -t mangle -o $ife2 -p tcp --sport $p -j MARK --set-mark $(($mrk+10))
+    $T -A INPUT-$ife -t mangle -i $ife2 -p tcp --dport $p -j MARK --set-mark $(($mrk+10))
+    # Lan <-> Box traffic (lowest priority) - MARK + 20
+    $T -A OUTPUT-$ife -t mangle -o ! $ife2 -p tcp --sport $p -j MARK --set-mark $(($mrk+20))
+    $T -A INPUT-$ife -t mangle -i ! $ife2 -p tcp --dport $p -j MARK --set-mark $(($mrk+20))
+    $T -A OUTPUT-$ife -t mangle -o ! $ife2 -p tcp --dport $p -j MARK --set-mark $(($mrk+20))
+    $T -A INPUT-$ife -t mangle -i ! $ife2 -p tcp --sport $p -j MARK --set-mark $(($mrk+20))
+   fi;
+  done;
+  if [ "$set_ttl" ]; then
+   $T -A FORWARD-$ife -t mangle -i ! $ife2 -o $ife2 -j TTL --ttl-set $set_ttl
+   $T -A FORWARD-$ife -t mangle -i $ife2 -o ! $ife2 -j TTL --ttl-set $set_ttl
+  fi;
+ fi;
+}
+
+# Main part of script - FILTER TABLE
+
+start () {
+
+ # New chains to group all traffic for single external interface
+ for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -N $ac; done
+
+ # standard policy
+ for chain in INPUT FORWARD OUTPUT; do
+  $T -P $chain DROP
+ done
+
+ [ "$ZorbIPTraffic" ] && $T -N ZORBCOUNT 2>/dev/null
+
+ # SPOOF PROTECTION
+ c=0
+ for i in $ifi; do
+  i=`echo $i | cut -f1 -d:` # aliases cut off
+  $T -A INPUT  -i $i -s ${local_net[$c]} -d ${lan_if_ip[$c]} -j INPUT-$ife
+  $T -A INPUT  -i $i -s ${local_net[$c]} -d ${lan_if_bc[$c]} -j INPUT-$ife
+  $T -A INPUT  -i $i -s ${local_net[$c]} -d 255.255.255.255 -j INPUT-$ife
+  $T -A INPUT  -i $i -s 0.0.0.0 -d 255.255.255.255 -j INPUT-$ife #dhcp requests
+  [ "$lans_ife" = "on" ] && $T -A INPUT  -i $i -s ${local_net[$c]} -d $ip_int -j INPUT-$ife
+  [ "$multicasts" = "on" ] && $T -A INPUT  -i $i -s ${local_net[$c]} -d 224.0.0.1 -j INPUT-$ife
+  if [ "$ZorbIPTraffic" ]; then
+   $T -A FORWARD -i $i -o $ife2 -s ${local_net[$c]} -j ZORBCOUNT
+   $T -A FORWARD -i $ife2 -o $i -d ${local_net[$c]} -j ZORBCOUNT
+  fi;
+  $T -A FORWARD -i $i -o $ife2 -s ${local_net[$c]} -d ! ${local_net[$c]} -j FORWARD-$ife
+  $T -A FORWARD -i $ife2 -o $i -s ! ${local_net[$c]} -d ${local_net[$c]} -j FORWARD-$ife
+  $T -A OUTPUT  -o $i -d ${local_net[$c]} -s ${lan_if_ip[$c]} -j OUTPUT-$ife
+  [ "$lans_ife" = "on" ] && $T -A OUTPUT  -o $i -d ${local_net[$c]} -s $ip_int -j OUTPUT-$ife
+  $T -A OUTPUT  -o $i -d 255.255.255.255 -s ${lan_if_ip[$c]} -j OUTPUT-$ife #dhcp replies
+  $T -A INPUT   -i lo -s ${lan_if_ip[$c]} -d ${lan_if_ip[$c]} -j INPUT-$ife
+  $T -A OUTPUT  -o lo -s ${lan_if_ip[$c]} -d ${lan_if_ip[$c]} -j OUTPUT-$ife
+  ((c=c+1))
+ done;
+
+ # subnet routing
+ if [ "$ifi" ]; then
+  if [ "$subnets_routing" ]; then
+   for a in $subnets_routing; do
+    for b in $subnets_routing; do
+     if [ $a != $b ]; then
+      c=0
+      for ib in $ifi; do
+       [ "$ib" = "$b" ] && ((b1=c))
+       ((c=c+1))
+      done;
+      c=0
+      for ib in $ifi; do
+       [ "$ib" = "$a" ] && ((a1=c))
+       ((c=c+1))
+      done;
+      ac=`echo $a | cut -f1 -d:`
+      bc=`echo $b | cut -f1 -d:`
+      $T -A INPUT -i $ac -s ${local_net[$a1]} -d ${local_net[$b1]} -j INPUT-$ife
+      $T -A FORWARD -s ${local_net[$a1]} -d ${local_net[$b1]} -j FORWARD-$ife
+      $T -A OUTPUT -o $ac -d ${local_net[$a1]} -s ${lan_if_ip[$b1]} -j INPUT-$ife
+     fi;
+    done;
+   done;
+  fi;
+ fi;
+
+ $T -A INPUT -i lo -s 127.0.0.0/8 -d 127.0.0.0/8 -j INPUT-$ife
+ $T -A OUTPUT -o lo -s 127.0.0.0/8 -d 127.0.0.0/8 -j OUTPUT-$ife
+ $T -A INPUT -i lo -s $ip_int -d $ip_int -j INPUT-$ife
+ $T -A OUTPUT -o lo -s $ip_int -d $ip_int -j OUTPUT-$ife
+ $T -A INPUT -i $ife2 -d $ip_int -j INPUT-$ife
+ $T -A INPUT -i $ife2 -d 255.255.255.255 -j INPUT-$ife
+ [ "$multicasts" = "on" ] && $ $T -A INPUT -i $ife2 -d 224.0.0.1 -j INPUT-$ife
+ $T -A OUTPUT -o $ife2 -s $ip_int -j OUTPUT-$ife
+
+ # Drop invalid & unclean packets
+ if [ "$unclean_check" != "off" ]; then
+  $T -A INPUT-$ife -m unclean -j DROP
+  $T -A FORWARD-$ife -m unclean -j DROP
+  $T -A OUTPUT-$ife -m unclean -j DROP
+ fi;
+ if [ "$state_invalid" ]; then
+  $T -A INPUT-$ife -m state --state INVALID -j DROP
+  $T -A FORWARD-$ife -m state --state INVALID -j DROP
+  $T -A OUTPUT-$ife -m state --state INVALID -j DROP
+ fi;
+
+ # in localhost we trust, do not trust if you have shell accounts
+ $T -A INPUT-$ife -i lo -j ACCEPT
+ $T -A OUTPUT-$ife -o lo -j ACCEPT
+
+ # all TCP traffic is checked in this chain
+ $T -N TCP-$ife
+ [ "$tcp_rate_limit" -a "$rate_check" = "on" ] && limit="-m limit --limit $tcp_rate_limit --limit-burst 20"
+ [ "$max_packet_size" ] && mss="--mss $(($max_packet_size-40))"
+ $T -A TCP-$ife -p tcp --tcp-flags ALL SYN $state_new $limit $mss -j ACCEPT
+ [ ! "$logging" -o "$logging" = "-p tcp" ] && $T -A TCP-$ife -p tcp --tcp-flags ALL SYN $state_new $mss $lograte -j LOG --log-prefix="GL-SYN_RATE " $ll
+ $T -A TCP-$ife -p tcp --tcp-flags ALL ACK,SYN $state_established $mss -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL ACK $state_established -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL ACK,PSH $state_established -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL ACK,RST $state_established -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL ACK,FIN $state_established -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL ACK,FIN,PSH $state_established -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL URG,ACK,PSH $state_established -j ACCEPT
+ $T -A TCP-$ife -p tcp --tcp-flags ALL RST $state_established -j ACCEPT
+
+ if [ ! "$logging" -o "$logging" = "-p tcp" ]; then
+  $T -A TCP-$ife -p tcp --tcp-flags ALL FIN,URG,PSH $lograte -j LOG --log-prefix "Stealth XMAS scan: " $dl $ll
+  $T -A TCP-$ife -p tcp --tcp-flags ALL SYN,RST,ACK,FIN,URG $lograte -j LOG --log-prefix "Stealth XMAS-PSH scan: " $dl $ll
+  $T -A TCP-$ife -p tcp --tcp-flags ALL ALL $lograte -j LOG  --log-prefix "Stealth XMAS-ALL scan: " $dl $ll
+  $T -A TCP-$ife -p tcp --tcp-flags ALL FIN $lograte -j LOG  --log-prefix "Stealth FIN scan: " $dl $ll
+  $T -A TCP-$ife -p tcp --tcp-flags SYN,RST SYN,RST $lograte -j LOG --log-prefix "Stealth SYN/RST scan: " $dl $ll
+  $T -A TCP-$ife -p tcp --tcp-flags SYN,FIN SYN,FIN $lograte -j LOG --log-prefix "Stealth SYN/FIN scan: " $dl $ll
+  $T -A TCP-$ife -p tcp --tcp-flags ALL NONE $lograte -j LOG --log-prefix "Stealth NULL scan: " $dl $ll
+  $T -A TCP-$ife $lograte -j LOG --log-prefix "Invalid TCP " $dl $ll
+ fi;
+ $T -A TCP-$ife -j DROP
+
+ # ICMP -  all ICMP traffic is checked in this chain
+ $T -N ICMP-$ife
+
+accept () {
+
+ dprt1=""; dprt2=""; sprt1=""; sprt2=""
+ proto="tcpudp"; owner=""; synlimit=""
+
+ if [ "`echo $p | grep :`" ]; then
+  proto=`echo ${s[65535]} | cut -f2 -d,`
+  sport=`echo ${s[65535]} | cut -f3 -d,`
+  uid=`echo ${s[65535]} | cut -f4 -d,`
+  gid=`echo ${s[65535]} | cut -f5 -d,`
+  if [ "$rate_check" = "on" ]; then
+   synlimit=`echo ${s[65535]} | cut -f6 -d,`
+   [ "`echo $in$out | grep ' F '`" ] && synlimit=`echo ${s[65535]} | cut -f7 -d,`
+   [ "$synlimit" ] && synlimit="-m limit --limit $synlimit/s"
+  fi;
+  if [ "$sport" ]; then dprt2="--dport $sport"; sprt1="--sport $sport"; fi
+  sprt2="--sport $p"; dprt1="--dport $p"
+  if [ "$uid$gid" -a "$noowner" = "false" -a "$owner_check" = "on" ]; then
+   owner="-m owner"
+   [ "$uid" ] && owner="$owner --uid-owner=$uid"
+   [ "$gid" ] && owner="$owner --gid-owner=$gid"
+  fi;
+ else
+  if [ $p != "all" ]; then
+   proto=`echo ${s[$p]} | cut -f2 -d,`
+   sport=`echo ${s[$p]} | cut -f3 -d,`
+   uid=`echo ${s[$p]} | cut -f4 -d,`
+   gid=`echo ${s[$p]} | cut -f5 -d,`
+
+   if [ "$rate_check" = "on" ]; then
+    synlimit=`echo ${s[$p]} | cut -f6 -d,`
+    [ "`echo $in$out | grep ' F '`" ] && synlimit=`echo ${s[$p]} | cut -f7 -d,`
+    [ "$synlimit" ] && synlimit="-m limit --limit $synlimit/s"
+   fi;
+
+   if [ "$sport" ]; then dprt2="--dport $sport"; sprt1="--sport $sport"; fi
+   sprt2="--sport $p"; dprt1="--dport $p"
+
+   if [ "$uid$gid" -a "$noowner" = "false" -a "$owner_check" = "on" ]; then
+    owner="-m owner"
+    [ "$uid" ] && owner="$owner --uid-owner=$uid"
+    [ "$gid" ] && owner="$owner --gid-owner=$gid"
+   fi;
+  fi;
+ fi;
+
+ if [ "$ftp_type" != "passive" ]; then
+  if [ "$p" = "20" -o "$p" = "all" ]; then #ACTIVE FTP
+  [ "$out" ] && $T $out -p tcp -s $ip2 --sport 20 -d $ip1 --dport 1024: --tcp-flags ALL SYN $state_related -j ACCEPT
+  fi;
+ fi;
+
+ if [ "$ftp_type" != "active" ]; then
+  if [ "$p" = "21" -o "$p" = "all" ]; then # PASSIVE FTP
+   [ "$out" ] && $T $out -p tcp -s $ip2 --sport 1024: -d $ip1 --dport 1024: $state_established -j TCP-$ife
+   [ "$in" ]  && $T $in  -p tcp -s $ip1 --sport 1024: -d $ip2 --dport 1024: $state_related -j ACCEPT
+   [ "$in" ]  && $T $in  -p tcp -s $ip1 --sport 1024: -d $ip2 --dport 1024: $state_established -j TCP-$ife
+  fi;
+ fi;
+
+ ip1tmp=$ip1
+ ip2tmp=$ip2
+
+ if [ $proto = "tcp" -o $proto = "tcpudp" ]; then
+  if [ "$in" ]; then
+   $T $in  -p tcp -s $ip1 $sprt1 -d $ip2 $dprt1 $state_new $synlimit -j TCP-$ife
+   [ ! "$logging" -o "$logging" = "-p tcp" ] && $T $in -p tcp -s $ip1 $sprt1 -d $ip2 $dprt1 $state_new $lograte -j LOG --log-prefix="TCP_SYN_RATE " $ll $dl
+   $T $in  -p tcp -s $ip1 $sprt1 -d $ip2 $dprt1 $state_established -j TCP-$ife
+  fi;
+  if [ "$out" ]; then
+   # TCP output with ACK,SYN set never have owner !!!
+   [ "$owner" ] && $T $out -p tcp -s $ip2 $sprt2 -d $ip1 $dprt2 $state_established --tcp-flags ALL ACK,SYN -j TCP-$ife
+   $T $out -p tcp -s $ip2 $sprt2 -d $ip1 $dprt2 $state_established $owner -j TCP-$ife
+  fi;
+ fi;
+ if [ $proto = "udp" -o $proto = "tcpudp" ]; then
+  if [ "$in" ]; then
+   if [ "$p" = "67" ]; then # DHCP is special...
+    ip1=0.0.0.0
+    ip2=255.255.255.255
+   fi;
+   [ "$p" = "all" ] && $T $in  -p udp -s 0.0.0.0 $sprt1 -d 255.255.255.255 $dprt1 $state_new $synlimit -j ACCEPT
+   $T $in  -p udp -s $ip1 $sprt1 -d $ip2 $dprt1 $state_new $synlimit -j ACCEPT
+   [ ! "$logging" -o "$logging" = "-p udp" ] && $T $in  -p udp -s $ip1 $sprt1 -d $ip2 $dprt1 $state_new $lograte -j LOG --log-prefix="UDP_SYN_RATE " $ll
+   $T $in  -p udp -s $ip1 $sprt1 -d $ip2 $dprt1 $state_established -j ACCEPT
+  fi;
+  if [ "$out" ]; then
+   if [ "$p" = "67" ]; then # DHCP is special...
+    ip1=255.255.255.255
+    ip2=$ip2tmp
+    $T $out -p udp -s $ip2 $sprt2 -d $ip1 $dprt2 $owner -j ACCEPT
+   else
+    # 137 - response packet for broadcast is treated as NEW
+    [ "$p" = "137" ] && $T $out -p udp -s $ip2 $sprt2 -d $ip1 $dprt2 $state_new $owner -j ACCEPT
+    [ "$p" = "all" ] && $T $out -p udp -s $ip2tmp $sprt2 -d 255.255.255.255 $dprt2 $state_established $owner -j ACCEPT
+    $T $out -p udp -s $ip2 $sprt2 -d $ip1 $dprt2 $state_established $owner -j ACCEPT
+   fi;
+  fi;
+ fi;
+ ip1=$ip1tmp
+ ip2=$ip2tmp
+
+}
+
+ echo -n .
+ ip1=$ip_int
+ ip2="0/0"
+ out="-A INPUT-$ife -i $ife2"
+ in="-A OUTPUT-$ife -o $ife2"
+ noowner="true"
+ for p in $hc2is; do accept; done
+
+ echo -n .
+ ip1="0/0"
+ ip2=$ip_int
+ in="-A INPUT-$ife -i $ife2"
+ out="-A OUTPUT-$ife -o $ife2"
+ noowner="false"
+ for p in $hs2ic; do accept; done
+
+ c=0
+ for i in $ifi; do
+
+  i=`echo $i | cut -f1 -d:` # iptables doesnt understand aliases
+
+  echo -n .
+  ip1=${local_net[$c]}
+  ip2=${lan_if_ip[$c]}
+  in="-A INPUT-$ife -i $i"
+  out="-A OUTPUT-$ife -o $i"
+  for p in ${hs2lc[$c]}; do
+   if [ "$p" = "all" -o "`echo ${s[$p]} | cut -f10 -d,`" = "b" ]; then
+    noowner="true"
+    ip2=${lan_if_bc[$c]}
+    accept
+    ip2=${lan_if_ip[$c]}
+   else
+    noowner="false"
+   fi;
+   accept
+  done
+  if [ "$lans_ife" = "on" ]; then
+   ip2=$ip_int
+   noowner="false"
+   for p in ${hs2lc[$c]}; do accept; done
+  fi;
+
+  echo -n .
+  ip1=${lan_if_ip[$c]}
+  ip2=${local_net[$c]}
+  in="-A OUTPUT-$ife -o $i"
+  out="-A INPUT-$ife -i $i"
+  noowner="true"
+  for p in ${hc2ls[$c]}; do accept; done
+
+  echo -n .
+  ip1=${local_net[$c]}
+  ip2="0/0"
+  in="-A FORWARD-$ife -i $i -o $ife2"
+  out="-A FORWARD-$ife -i $ife2 -o $i"
+  for p in ${l2i[$c]}; do accept; done
+
+  # allow definied ICMP incoming, forwarding & outgoing to/via/from internal interfaces
+  for ia in $icmp_allow_incoming; do
+   $T -A ICMP-$ife -p icmp -i $i -s ${local_net[$c]} -d ${lan_if_ip[$c]} --icmp-type $ia -j ACCEPT
+  done
+  for ia in $icmp_allow_outgoing; do
+   $T -A ICMP-$ife -p icmp -o $i -d ${local_net[$c]} -s ${lan_if_ip[$c]} --icmp-type $ia -j ACCEPT
+  done
+  for ia in $icmp_allow_forwarding; do
+   $T -A ICMP-$ife -p icmp -i $i -o $ife2 -s ${local_net[$c]} -d ! ${local_net[$c]} --icmp-type $ia -j ACCEPT
+   $T -A ICMP-$ife -p icmp -o $i -i $ife2 -d ${local_net[$c]} -s ! ${local_net[$c]} --icmp-type $ia -j ACCEPT
+  done
+
+ ((c=c+1))
+
+ done;
+
+ for pf in $dnat; do
+  nat_source=`echo $pf | cut -f1 -d-`
+  nat_via=`echo $pf | cut -f2 -d-`
+  nat_dest=`echo $pf | cut -f3 -d-`
+  p=`echo $nat_dest | cut -f2 -d:`
+  [ ! "$p" ] && p="all"
+  in="-A FORWARD-$ife -i $ife2"
+  out="-A FORWARD-$ife -o $ife2"
+  ip1=`echo $nat_source | cut -f1 -d:`
+  ip2=`echo $nat_dest | cut -f1 -d:`
+  noowner="true"
+  accept
+ done
+
+ # allow definied ICMP incoming & outgoing to/from external interface
+ for ia in $icmp_allow_incoming; do
+  $T -A ICMP-$ife -p icmp -i $ife2 -d $ip_int --icmp-type $ia -j ACCEPT
+ done
+ for ia in $icmp_allow_outgoing; do
+  $T -A ICMP-$ife -p icmp -o $ife2 -s $ip_int --icmp-type $ia -j ACCEPT
+ done
+
+
+ [ ! "$logging" -o "$logging" = "-p icmp" ] && $T -A ICMP-$ife $lograte -j LOG --log-prefix "Invalid ICMP " $dl $ll
+ $T -A ICMP-$ife -j DROP
+
+ [ "$icmp_rate_limit" -a "$rate_check" = "on" ] && limit="-m limit --limit $icmp_rate_limit"
+ [ "$length_check" = "on" ] && length="-m length --length 20:1512"
+
+ for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -A $ac -p icmp $limit $length -j ICMP-$ife; done
+
+ # REJECT PORTS
+ for rp in $reject_ports; do
+  [ "$rate_check" = "on" ] && limit="-m limit --limit 3/s"
+  $T -A INPUT-$ife -i $ife2 -p tcp --dport $rp --tcp-flags ALL SYN $limit -j REJECT --reject-with tcp-reset
+  $T -A OUTPUT-$ife -o $ife2 -p tcp --sport $rp -j ACCEPT
+ done;
+
+ # DROPLOG
+ for dr in $droplogs; do
+  dr_src=`echo $dr | cut -f1 -d-`
+  dr_dst=`echo $dr | cut -f2 -d-`
+  dr_src_ip=`echo $dr_src | cut -f1 -d:`
+  dr_src_pt=`echo $dr_src | cut -f2- -d:`
+  dr_dst_ip=`echo $dr_dst | cut -f1 -d:`
+  dr_dst_pt=`echo $dr_dst | cut -f2- -d:`
+  [ "$dr_src_ip" = "$dr_src_pt" ] && dr_src_pt=""
+  [ "$dr_dst_ip" = "$dr_dst_pt" ] && dr_dst_pt=""
+  [ "$dr_src_pt" ] && dr_src_pt="--sport $dr_src_pt"
+  [ "$dr_dst_pt" ] && dr_dst_pt="--dport $dr_dst_pt"
+  if [ "$dr_src_ip" -a "$dr_dst_ip" ]; then
+   if [ "$dr_src_pt" -o "$dr_dst_pt" ]; then
+    for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -A $ac -p tcp -s $dr_src_ip $dr_src_pt -d $dr_dst_ip $dr_dst_pt -j DROP; done
+    for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -A $ac -p udp -s $dr_src_ip $dr_src_pt -d $dr_dst_ip $dr_dst_pt -j DROP; done
+   else
+    for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -A $ac -s $dr_src_ip -d $dr_dst_ip -j DROP; done
+   fi;
+  fi;
+ done
+
+ # Logging
+ if [ "$logging" != "none" ]; then
+  for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -A $ac $logging $lograte -j LOG --log-prefix "$ife " $dl $ll; done
+ fi;
+
+ # hence we dont want to log twice, we drop
+ for ac in INPUT-$ife FORWARD-$ife OUTPUT-$ife; do $T -A $ac -j DROP; done
+ echo -n .
+
+ # ZorbIPTraffic
+ if [ "$ZorbIPTraffic" ]; then
+  for ip in $ZorbIPTraffic; do
+   $T -A ZORBCOUNT -s $ip
+   $T -A ZORBCOUNT -d $ip
+  done;
+  c=0
+  for i in $ifi; do
+   $T -A ZORBCOUNT -s ${local_net[$c]}
+   $T -A ZORBCOUNT -d ${local_net[$c]}
+   ((c=c+1))
+  done;
+ fi;
+
+}
+
+wipe () {
+
+ $T -P INPUT ACCEPT
+ $T -P FORWARD ACCEPT
+ $T -P OUTPUT ACCEPT
+ $T -F
+ $T -X
+ $T -t nat -F
+ $T -t nat -X
+ $T -t mangle -F
+ $T -t mangle -X
+
+}
+
+case "$1" in
+start)
+    paths
+    uidcheck
+    echo -n $"Starting firewall @ $ife "
+    init
+    modprobe
+    check
+    sysctl
+    reset
+    nat
+    start
+    mangle
+    date > /var/run/lutelfirewall-$ife 2>/dev/null
+    chmod 0600 /var/run/lutelfirewall-$ife 2>/dev/null
+    echo -ne " OK\n"
+    ;;
+stop)
+    paths
+    uidcheck
+    echo -n $"Stopping firewall @ $ife "
+    init
+    check
+    reset
+    [ "`$T -L -n | wc -l`" -le 10 ] && wipe
+    [ $nataftstop = "on" ] && nat
+    rm -f /var/run/lutelfirewall-$ife
+    echo -ne " OK\n"
+    ;;
+restart)
+    paths
+    uidcheck
+    echo -n $"Restarting firewall @ $ife "
+    init
+    modprobe
+    check
+    sysctl
+    reset
+    nat
+    [ "`$T -L -n | wc -l`" -le 10 ] && wipe
+    rm -f /var/run/lutelfirewall-$ife
+    start
+    mangle
+    date > /var/run/lutelfirewall-$ife 2>/dev/null
+    chmod 0600 /var/run/lutelfirewall-$ife 2>/dev/null
+    echo -ne " OK\n"
+    ;;
+nat)
+    paths
+    uidcheck
+    echo -n $"Starting NAT only @ $ife "
+    init
+    modprobe
+    check
+    sysctl
+    reset
+    [ "`$T -L -n | wc -l`" -le 10 ] && wipe
+    nat
+    echo -ne " OK\n"
+    ;;
+config)
+    paths
+    uidcheck
+    init
+    cat $0 | head -n1 | head -n1 | sed s/'  \|#\|='//g
+    echo -e "\nCurrent configuration\nExternal interface:\t$ife ip $ip_int"
+    [ "$hs2ic" ] && echo -e " Server $HOSTNAME services available only to clients behind $ife (internet clients):\n  $hs2ic"
+    c=0
+    for i in $ifi; do
+     echo -e "\nInternal interface [$c]:\t$i ip ${lan_if_ip[$c]}\tbcast ${lan_if_bc[$c]}\tnetwork ${local_net[$c]}\n"
+     if [ "`echo \"$masquerade\ " | grep -E "$i[^':']" | cut -f1 -d' '`" ]; then
+      echo -e " Internet services available to clients at ${local_net[$c]} (lan masquerade):\n  ${l2i[$c]}"
+     fi;
+     [ "${hs2lc[$c]}" ] && echo -e " $HOSTNAME server services available only to clients at ${local_net[$c]} (lan):\n  ${hs2lc[$c]}"
+     [ "${hc2ls[$c]}" ] && echo -e " Network client services available only to server $HOSTNAME:\n  ${hc2ls[$c]}"
+     [ "${hc2is[$c]}" ] && echo -e " Internet services available only to server $HOSTNAME:\n  ${hc2is[$c]}"
+     ((c=c+1))
+    done;
+    echo
+    [ "$dnat" ] && echo -e "Traffic redirections:\n  $dnat"
+    ;;
+stats)
+    paths
+    uidcheck
+    $T -L -v -n
+    ;;
+status)
+    paths
+    uidcheck
+    if [ -f /var/run/lutelfirewall-$ife ]; then
+     echo $"Lutel Firewall @ $ife is ON"
+    else
+     echo $"Lutel Firewall @ $ife is OFF"
+    fi;
+    ;;
+wipe)
+    paths
+    uidcheck
+    echo -n $"Stopping all firewall instances "
+    wipe
+    rm -f /var/run/lutelfirewall-*
+    echo -ne ". OK\n"
+    ;;
+*)
+  echo "usage:  $0 {start|stop|restart|nat|config|stats|status}"
+  echo "	start   - Enable firewall for $ife (with NAT if configured)"
+  echo "	stop    - Disable firewall for $ife (and NAT if configured)"
+  echo "	restart - Restart firewall for $ife"
+  echo "	nat     - Enable only NAT (including masquerade), but no filters"
+  echo "	config  - Show current configuration"
+  echo "	stats   - Show all chains with their byte counters"
+  echo "	status  - Firewall status"
+  echo "	wipe    - Wipe all firewall rules (affects all instances of script)"
+ exit 1
+esac
+
+exit 0

@@ -1,0 +1,833 @@
+#################################################################################
+#
+# IPTABLES Firewall v 0.86
+# by shadow999@firemail.de
+#
+# Small parts from http://members.optusnet.com.au/~technion/
+# and some tutorials
+#
+# This script is intended to setup a masquerading firewall based on
+# the IPTABLES (Net)filter-machanism of Linux 2.3.15+
+# Syslogging matches fireparse for graphical output (see http://www.fireparse.com)
+#
+# Normally this script will work 'out-of-the-box', but you should adapt it to
+# your own needs (At least you should set the correct default interfaces 
+# --> see Default-Interfaces section)
+#
+# Comments, suggestions, etc. are welcome
+#
+# Usage on your own risk ;)
+#
+# Syntax to invoke script: firewall (start|stop|restart|status) EXTIF INTIF
+# Example: "firewall start ppp0 eth0"
+#
+#################################################################################
+#
+# Version History:
+#
+# 0.86: Added a few comments
+#
+# 0.85: Various re-arrangements
+#	Added TCP-SYN-flood protection
+#	Added separate logging of pingfloods
+#	Added automatic detection of parameters on internal interface
+#	Made flooding-parameters variable
+#
+# 0.84: Added special ICMP-Filtering	
+#
+# 0.83:	Added ICMP-logging-chain
+#	Some minor changes
+#
+# 0.82: Reorganized parts of the script
+#	Added special user-chains
+#
+# 0.80: Altered logging strings to match fireparse
+#
+# 0.78: Added many comments
+#       Completed flushing of tables (missing -X)
+#
+# 0.75: Added automatic detection of IP-address, gateway, etc of external interface
+#
+# 0.7: Added new logging-chains
+#
+# 0.65: Added special sanity checks for TCP-Flags
+#       Silently filter out SMB-traffic
+#       Removed unclean-checks (according to some docs still unstable)
+#
+# 0.6: Major redesign of whole script, divided into chain-sections
+#
+# 0.5: Adopted parts of firewall-script from http://members.optusnet.com.au/~technion/
+#      Minor changes
+#
+#
+########################################################################################
+
+#!/bin/sh
+
+# This is the location of the iptables command
+IPTABLES="/usr/sbin/iptables"
+
+
+case "$1" in
+   stop)
+      echo "Shutting down firewall..."
+      $IPTABLES -F
+      $IPTABLES -F -t mangle
+      $IPTABLES -F -t nat
+      $IPTABLES -X
+      $IPTABLES -X -t mangle
+      $IPTABLES -X -t nat
+      
+      $IPTABLES -P INPUT ACCEPT
+      $IPTABLES -P OUTPUT ACCEPT
+      $IPTABLES -P FORWARD ACCEPT
+      echo "...done"
+      ;;
+   status)
+      echo $"Table: filter"
+      iptables --list
+      echo $"Table: nat"
+      iptables -t nat --list
+      echo $"Table: mangle"
+      iptables -t mangle --list
+      ;;
+   restart|reload)
+      $0 stop
+      $0 start
+      ;;
+   start)
+    echo "Starting Firewall..."
+    echo ""
+
+
+##--------------------------Begin Firewall---------------------------------##
+
+
+#----Default-Interfaces-----#
+
+## Default external interface (used, if EXTIF isn't specified on command line)
+DEFAULT_EXTIF="ppp0"
+
+## Default internal interface (used, if INTIF isn't specified on command line)
+DEFAULT_INTIF="eth0"
+
+
+#----Special Variables-----#
+
+# IP Mask for all IP addresses
+UNIVERSE="0.0.0.0/0"
+
+# Specification of the high unprivileged IP ports.
+UNPRIVPORTS="1024:65535"
+
+# Specification of X Window System (TCP) ports.
+XWINPORTS="6000:6063"
+
+# Ports for IRC-Connection-Tracking
+IRCPORTS="6665,6666,6667,6668,6669,7000"
+
+
+#-----Port-Forwarding Variables-----#
+
+#For port-forwarding to an internal host, define a variable with the appropriate
+#internal IP-Address here and take a look at the port-forwarding sections in the FORWARD +
+#PREROUTING-chain:
+
+#These are examples, uncomment to activate
+
+#IP for forwarded Battlecom-traffic
+#BATTLECOMIP="192.168.0.5"
+
+#IP for forwarded HTTP-traffic
+#HTTPIP="192.168.0.20"
+
+
+#----Flood Variables-----#
+
+# Overall Limit for TCP-SYN-Flood detection
+TCPSYNLIMIT="5/s"
+# Burst Limit for TCP-SYN-Flood detection
+TCPSYNLIMITBURST="10"
+
+# Overall Limit for Loggging in Logging-Chains
+LOGLIMIT="2/s"
+# Burst Limit for Logging in Logging-Chains
+LOGLIMITBURST="10"
+
+# Overall Limit for Ping-Flood-Detection
+PINGLIMIT="5/s"
+# Burst Limit for Ping-Flood-Detection
+PINGLIMITBURST="10"
+
+
+
+#----Automatically determine infos about involved interfaces-----#
+
+### External Interface:
+
+## Get external interface from command-line
+## If no interface is specified then set $DEFAULT_EXTIF as EXTIF
+if [ "x$2" != "x" ]; then
+   EXTIF=$2
+else
+   EXTIF=$DEFAULT_EXTIF
+fi
+echo External Interface: $EXTIF
+
+## Determine external IP
+EXTIP="`ifconfig $EXTIF | grep inet | cut -d : -f 2 | cut -d \  -f 1`"
+  if [ "$EXTIP" = '' ]; then
+     echo "Aborting: Unable to determine the IP-address of $EXTIF !"
+     exit 1
+  fi
+echo External IP: $EXTIP
+
+## Determine external gateway
+EXTGW=`route -n | grep -A 4 UG | awk '{ print $2}'`
+echo Default GW: $EXTGW
+
+
+echo " --- "
+
+
+### Internal Interface:
+
+## Get internal interface from command-line
+## If no interface is specified then set $DEFAULT_INTIF as INTIF
+if [ "x$3" != "x" ]; then
+   INTIF=$3
+else
+   INTIF=$DEFAULT_INTIF
+fi
+echo Internal Interface: $INTIF
+
+## Determine internal IP
+INTIP="`ifconfig $INTIF | grep inet | cut -d : -f 2 | cut -d \  -f 1`"
+  if [ "$INTIP" = '' ]; then
+     echo "Aborting: Unable to determine the IP-address of $INTIF !"
+     exit 1
+  fi  
+echo Internal IP: $INTIP
+
+## Determine internal netmask
+INTMASK="`ifconfig $INTIF | grep Mask | cut -d : -f 4`"
+echo Internal Netmask: $INTMASK
+
+## Determine network address of the internal network
+INTLAN=$INTIP'/'$INTMASK
+echo Internal LAN: $INTLAN
+
+echo ""
+
+
+#----Load IPTABLES-modules-----#
+
+
+#Insert modules- should be done automatically if needed
+
+#If the IRC-modules are available, uncomment them below
+
+echo "Loading IPTABLES modules"
+
+dmesg -n 1 #Kill copyright display on module load
+/sbin/modprobe ip_tables
+/sbin/modprobe iptable_filter
+/sbin/modprobe ip_conntrack
+/sbin/modprobe ip_conntrack_ftp
+/sbin/modprobe ip_nat_ftp
+#/sbin/modprobe ip_conntrack_irc ports=$IRCPORTS
+#/sbin/modprobe ip_nat_irc ports=$IRCPORTS
+dmesg -n 6
+
+echo " --- "
+
+
+#----Clear/Reset all chains-----#
+
+#Clear all IPTABLES-chains
+
+#Flush everything, start from scratch
+$IPTABLES -F
+$IPTABLES -F -t mangle
+$IPTABLES -F -t nat
+$IPTABLES -X
+$IPTABLES -X -t mangle
+$IPTABLES -X -t nat
+
+#Set default policies to DROP
+$IPTABLES -P INPUT DROP
+$IPTABLES -P OUTPUT DROP
+$IPTABLES -P FORWARD DROP
+
+
+#----Set network sysctl options-----#
+
+
+echo "Setting sysctl options"
+
+#Enable forwarding in kernel
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+#Disabling IP Spoofing attacks.
+echo 2 > /proc/sys/net/ipv4/conf/all/rp_filter
+
+#Don't respond to broadcast pings (Smurf-Amplifier-Protection)
+echo "1" > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+
+#Block source routing
+echo 0 > /proc/sys/net/ipv4/conf/all/accept_source_route
+
+#Kill timestamps
+echo 0 > /proc/sys/net/ipv4/tcp_timestamps
+
+#Enable SYN Cookies
+echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+
+#Kill redirects
+echo 0 > /proc/sys/net/ipv4/conf/all/accept_redirects
+
+#Enable bad error message protection
+echo 1 > /proc/sys/net/ipv4/icmp_ignore_bogus_error_responses
+
+#Log martians (packets with impossible addresses)
+echo 1 > /proc/sys/net/ipv4/conf/all/log_martians
+
+#Set out local port range
+echo "32768 61000" > /proc/sys/net/ipv4/ip_local_port_range
+
+#Reduce DoS'ing ability by reducing timeouts
+echo 30 > /proc/sys/net/ipv4/tcp_fin_timeout
+echo 2400 > /proc/sys/net/ipv4/tcp_keepalive_time
+echo 0 > /proc/sys/net/ipv4/tcp_window_scaling
+echo 0 > /proc/sys/net/ipv4/tcp_sack
+
+
+echo " --- "
+
+echo "Creating user-chains"
+
+
+
+#----Create logging chains-----#
+
+##These are the logging-chains. They all have a certain limit of log-entries/sec to prevent log-flooding
+##The syslog-entries will be fireparse-compatible (see http://www.fireparse.com)
+
+
+#Invalid packets (not ESTABLISHED,RELATED or NEW)
+	$IPTABLES -N LINVALID
+	$IPTABLES -A LINVALID -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=INVALID:1 a=DROP "
+	$IPTABLES -A LINVALID -j DROP
+
+#TCP-Packets with one ore more bad flags
+	$IPTABLES -N LBADFLAG
+	$IPTABLES -A LBADFLAG -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=BADFLAG:1 a=DROP "
+	$IPTABLES -A LBADFLAG -j DROP
+
+#Logging of connection attempts on special ports (Trojan portscans, special services, etc.)
+	$IPTABLES -N LSPECIALPORT
+	$IPTABLES -A LSPECIALPORT -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=SPECIALPORT:1 a=DROP "
+	$IPTABLES -A LSPECIALPORT -j DROP
+	
+#Logging of possible TCP-SYN-Floods
+	$IPTABLES -N LSYNFLOOD
+	$IPTABLES -A LSYNFLOOD -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=SYNFLOOD:1 a=DROP "
+	$IPTABLES -A LSYNFLOOD -j DROP
+	
+#Logging of possible Ping-Floods
+	$IPTABLES -N LPINGFLOOD
+	$IPTABLES -A LPINGFLOOD -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=PINGFLOOD:1 a=DROP "
+	$IPTABLES -A LPINGFLOOD -j DROP
+
+
+#All other dropped packets
+	$IPTABLES -N LDROP
+	$IPTABLES -A LDROP -p tcp -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=TCP:1 a=DROP "
+	$IPTABLES -A LDROP -p udp -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=UDP:2 a=DROP "
+	$IPTABLES -A LDROP -p icmp -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=ICMP:3 a=DROP "
+	$IPTABLES -A LDROP -f -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=FRAGMENT:4 a=DROP "
+	$IPTABLES -A LDROP -j DROP
+
+#All other rejected packets
+	$IPTABLES -N LREJECT
+	$IPTABLES -A LREJECT -p tcp -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=TCP:1 a=REJECT "
+	$IPTABLES -A LREJECT -p udp -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=UDP:2 a=REJECT "
+	$IPTABLES -A LREJECT -p icmp -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=ICMP:3 a=REJECT "
+	$IPTABLES -A LREJECT -f -m limit --limit $LOGLIMIT --limit-burst $LOGLIMITBURST -j LOG --log-prefix "fp=FRAGMENT:4 a=REJECT "	
+	$IPTABLES -A LREJECT -p tcp -j REJECT --reject-with tcp-reset
+	$IPTABLES -A LREJECT -p udp -j REJECT --reject-with icmp-port-unreachable
+	$IPTABLES -A LREJECT -j REJECT
+
+
+
+#----Create Accept-Chains-----#
+
+
+#TCPACCEPT - Check for SYN-Floods before letting TCP-Packets in
+	
+	$IPTABLES -N TCPACCEPT
+	$IPTABLES -A TCPACCEPT -p tcp --syn -m limit --limit $TCPSYNLIMIT --limit-burst $TCPSYNLIMITBURST -j ACCEPT
+	$IPTABLES -A TCPACCEPT -p tcp --syn -j LSYNFLOOD
+	$IPTABLES -A TCPACCEPT -p tcp ! --syn -j ACCEPT
+
+
+#----Create special User-Chains-----#
+
+
+#CHECKBADFLAG - Kill any Inbound/Outbound TCP-Packets with impossible flag-combinations (Some port-scanners use these, eg. nmap Xmas,Null,etc.-scan)
+
+	$IPTABLES -N CHECKBADFLAG
+	$IPTABLES -A CHECKBADFLAG -p tcp --tcp-flags ALL FIN,URG,PSH -j LBADFLAG
+	$IPTABLES -A CHECKBADFLAG -p tcp --tcp-flags ALL SYN,RST,ACK,FIN,URG -j LBADFLAG
+	$IPTABLES -A CHECKBADFLAG -p tcp --tcp-flags ALL ALL -j LBADFLAG
+	$IPTABLES -A CHECKBADFLAG -p tcp --tcp-flags ALL NONE -j LBADFLAG
+	$IPTABLES -A CHECKBADFLAG -p tcp --tcp-flags SYN,RST SYN,RST -j LBADFLAG
+	$IPTABLES -A CHECKBADFLAG -p tcp --tcp-flags SYN,FIN SYN,FIN -j LBADFLAG
+
+
+
+#FILTERING FOR SPECIAL PORTS
+
+
+	#Inbound/Outbound SILENTDROPS/REJECTS (Things we don't want in our Logs)
+
+		#SMB-Traffic
+		$IPTABLES -N SMB
+		
+		$IPTABLES -A SMB -p tcp --dport 137 -j DROP
+		$IPTABLES -A SMB -p tcp --dport 138 -j DROP
+		$IPTABLES -A SMB -p tcp --dport 139 -j DROP
+		$IPTABLES -A SMB -p tcp --dport 445 -j DROP
+		$IPTABLES -A SMB -p udp --dport 137 -j DROP
+		$IPTABLES -A SMB -p udp --dport 138 -j DROP
+		$IPTABLES -A SMB -p udp --dport 139 -j DROP
+		$IPTABLES -A SMB -p udp --dport 445 -j DROP
+  
+		$IPTABLES -A SMB -p tcp --sport 137 -j DROP
+		$IPTABLES -A SMB -p tcp --sport 138 -j DROP
+		$IPTABLES -A SMB -p tcp --sport 139 -j DROP
+		$IPTABLES -A SMB -p tcp --sport 445 -j DROP
+		$IPTABLES -A SMB -p udp --sport 137 -j DROP
+		$IPTABLES -A SMB -p udp --sport 138 -j DROP
+		$IPTABLES -A SMB -p udp --sport 139 -j DROP
+		$IPTABLES -A SMB -p udp --sport 445 -j DROP
+
+
+	#Inbound Special Ports
+	
+		$IPTABLES -N SPECIALPORTS
+		
+		#Deepthroat Scan
+  		$IPTABLES -A SPECIALPORTS -p  tcp --dport 6670 -j LSPECIALPORT
+  
+  		#Subseven Scan
+  		$IPTABLES -A SPECIALPORTS -p tcp --dport 1243 -j LSPECIALPORT
+                $IPTABLES -A SPECIALPORTS -p udp --dport 1243 -j LSPECIALPORT
+                $IPTABLES -A SPECIALPORTS -p tcp --dport 27374 -j LSPECIALPORT
+                $IPTABLES -A SPECIALPORTS -p udp --dport 27374 -j LSPECIALPORT
+  		$IPTABLES -A SPECIALPORTS -p tcp --dport 6711:6713 -j LSPECIALPORT  
+  
+  		#Netbus Scan
+  		$IPTABLES -A SPECIALPORTS -p tcp --dport 12345:12346 -j LSPECIALPORT
+  		$IPTABLES -A SPECIALPORTS -p tcp --dport 20034 -j LSPECIALPORT
+  
+  		#Back Orifice scan
+  		$IPTABLES -A SPECIALPORTS -p udp --dport 31337:31338 -j LSPECIALPORT
+  
+  		#X-Win
+  		$IPTABLES -A SPECIALPORTS -p tcp --dport $XWINPORTS  -j LSPECIALPORT
+
+		#Hack'a'Tack 2000
+		$IPTABLES -A SPECIALPORTS -p udp --dport 28431 -j LSPECIALPORT
+
+
+
+#ICMP/TRACEROUTE FILTERING
+
+
+	#Inbound ICMP/Traceroute
+	
+		$IPTABLES -N ICMPINBOUND
+		
+		#Ping Flood protection. Accept $PINGLIMIT echo-requests/sec, rest will be logged/dropped
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type echo-request -m limit --limit $PINGLIMIT --limit-burst $PINGLIMITBURST -j ACCEPT
+  		#
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type echo-request -j LPINGFLOOD
+
+  		#Block ICMP-Redirects (Should already be catched by sysctl-options, if enabled)
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type redirect -j LDROP
+  
+  		#Block ICMP-Timestamp (Should already be catched by sysctl-options, if enabled)
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type timestamp-request -j LDROP
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type timestamp-reply -j LDROP
+
+  		#Block ICMP-address-mask (can help to prevent OS-fingerprinting)
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type address-mask-request -j LDROP
+  		$IPTABLES -A ICMPINBOUND -p icmp --icmp-type address-mask-reply -j LDROP
+
+
+  		#Allow all other ICMP in
+  		$IPTABLES -A ICMPINBOUND -p icmp -j ACCEPT
+	
+	
+	
+	
+	#Outbound ICMP/Traceroute
+	
+		$IPTABLES -N ICMPOUTBOUND
+	
+		#Block ICMP-Redirects (Should already be catched by sysctl-options, if enabled)
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type redirect -j LDROP
+  
+  		#Block ICMP-TTL-Expired
+		#MS Traceroute (MS uses ICMP instead of UDp for tracert)
+		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type ttl-zero-during-transit -j LDROP
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type ttl-zero-during-reassembly -j LDROP
+  
+  		#Block ICMP-Parameter-Problem
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type parameter-problem -j LDROP
+  
+  		#Block ICMP-Timestamp (Should already be catched by sysctl-options, if enabled)
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type timestamp-request -j LDROP
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type timestamp-reply -j LDROP
+
+  		#Block ICMP-address-mask (can help to prevent OS-fingerprinting)
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type address-mask-request -j LDROP
+  		$IPTABLES -A ICMPOUTBOUND -p icmp --icmp-type address-mask-reply -j LDROP
+
+
+  		##Accept all other ICMP going out
+  		$IPTABLES -A ICMPOUTBOUND -p icmp -j ACCEPT
+	
+	
+
+#----End User-Chains-----#	
+
+
+
+echo " --- "
+
+
+#----Start Ruleset-----#
+
+echo "Implementing firewall rules..."
+
+
+#################
+## INPUT-Chain ## (everything that is addressed to the firewall itself)
+#################
+
+
+##GENERAL Filtering
+
+  # Kill INVALID packets (not ESTABLISHED, RELATED or NEW)
+  $IPTABLES -A INPUT -m state --state INVALID -j LINVALID
+  
+  # Check TCP-Packets for Bad Flags 
+  $IPTABLES -A INPUT -p tcp -j CHECKBADFLAG
+
+
+##Packets FROM FIREWALL-BOX ITSELF
+
+  #Local IF
+  $IPTABLES -A INPUT -i lo -j ACCEPT
+  #
+  #Kill connections to the local interface from the outside world (--> Should be already catched by kernel/rp_filter)
+  $IPTABLES -A INPUT -d 127.0.0.0/8 -j LREJECT
+
+
+##Packets FROM INTERNAL NET
+
+
+ ##Allow unlimited traffic from internal network using legit addresses to firewall-box
+ ##If protection from the internal interface is needed, alter it
+ 
+  $IPTABLES -A INPUT -i $INTIF -s $INTLAN -j ACCEPT
+  
+  #Kill anything from outside claiming to be from internal network (Address-Spoofing --> Should be already catched by rp_filter)
+  $IPTABLES -A INPUT -s $INTLAN -j LREJECT
+
+
+
+##Packets FROM EXTERNAL NET
+
+
+ ##ICMP & Traceroute filtering
+  
+  #Filter ICMP
+  $IPTABLES -A INPUT -i $EXTIF -p icmp -j ICMPINBOUND
+
+  #Block UDP-Traceroute
+  $IPTABLES -A INPUT -p udp --dport 33434:33523 -j LDROP
+
+
+ ##Silent Drops/Rejects (Things we don't want in our logs)
+
+  #Drop all SMB-Traffic
+  $IPTABLES -A INPUT -i $EXTIF -j SMB
+  
+  #Silently reject Ident (Don't DROP ident, because of possible delays when establishing an outbound connection)
+  $IPTABLES -A INPUT -i $EXTIF -p tcp --dport 113 -j REJECT --reject-with tcp-reset
+
+
+ ##Public services running ON FIREWALL-BOX (comment out to activate):
+
+  # ftp-data
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp  --dport 20 -j TCPACCEPT
+  
+  # ftp
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp  --dport 21 -j TCPACCEPT
+
+  # ssh
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 22 -j TCPACCEPT
+
+  #telnet
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 23 -j TCPACCEPT
+
+  # smtp
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 25 -j TCPACCEPT
+
+  # DNS
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 53 -j TCPACCEPT
+  #$IPTABLES -A INPUT -i $EXTIF -p udp --dport 53 -j ACCEPT
+
+  # http
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 80 -j TCPACCEPT
+
+  # https
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 443 -j TCPACCEPT
+
+  # POP-3
+  #$IPTABLES -A INPUT -i $EXTIF -p tcp --dport 110 -j TCPACCEPT
+
+
+
+ ##Separate logging of special portscans/connection attempts
+  
+  $IPTABLES -A INPUT -i $EXTIF -j SPECIALPORTS
+
+
+
+ ##Allow ESTABLISHED/RELATED connections in
+  
+  $IPTABLES -A INPUT -i $EXTIF -m state --state ESTABLISHED -j ACCEPT
+  $IPTABLES -A INPUT -i $EXTIF -p tcp --dport $UNPRIVPORTS -m state --state RELATED -j TCPACCEPT
+  $IPTABLES -A INPUT -i $EXTIF -p udp --dport $UNPRIVPORTS -m state --state RELATED -j ACCEPT
+
+
+ ##Catch all rule
+  $IPTABLES -A INPUT -j LDROP
+
+
+
+
+
+##################
+## Output-Chain ## (everything that comes directly from the Firewall-Box)
+##################
+
+
+
+##Packets TO FIREWALL-BOX ITSELF
+
+  #Local IF
+  $IPTABLES -A OUTPUT -o lo -j ACCEPT
+  
+
+##Packets TO INTERNAL NET
+
+  #Allow unlimited traffic to internal network using legit addresses
+  $IPTABLES -A OUTPUT -o $INTIF -d $INTLAN -j ACCEPT
+
+
+
+##Packets TO EXTERNAL NET
+
+
+ ##ICMP & Traceroute
+
+  $IPTABLES -A OUTPUT -o $EXTIF -p icmp -j ICMPOUTBOUND
+  
+
+
+ ##Silent Drops/Rejects (Things we don't want in our logs)
+
+  #SMB
+  $IPTABLES -A OUTPUT -o $EXTIF -j SMB
+
+  #Ident
+  $IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 113 -j REJECT --reject-with tcp-reset
+
+
+
+ ##Public services running ON FIREWALL-BOX (comment out to activate):
+
+  # ftp-data
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp  --sport 20 -j ACCEPT
+  
+  # ftp
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp  --sport 21 -j ACCEPT
+
+  # ssh
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+
+  #telnet
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 23 -m state --state ESTABLISHED -j ACCEPT
+
+  # smtp
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 25 -m state --state ESTABLISHED -j ACCEPT
+
+  # DNS
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 53 -j ACCEPT
+  #$IPTABLES -A OUTPUT -o $EXTIF -p udp --sport 53 -j ACCEPT
+
+  # http
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 80 -m state --state ESTABLISHED -j ACCEPT
+
+  # https
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 443 -m state --state ESTABLISHED -j ACCEPT
+
+  # POP-3
+  #$IPTABLES -A OUTPUT -o $EXTIF -p tcp --sport 110 -m state --state ESTABLISHED -j ACCEPT
+
+
+
+
+ ##Accept all tcp/udp traffic on unprivileged ports going out
+
+  $IPTABLES -A OUTPUT -o $EXTIF -s $EXTIP -p tcp --sport $UNPRIVPORTS -j ACCEPT
+  $IPTABLES -A OUTPUT -o $EXTIF -s $EXTIP -p udp --sport $UNPRIVPORTS -j ACCEPT
+
+
+
+##Catch all rule
+
+$IPTABLES -A OUTPUT -j LDROP
+
+
+
+
+####################
+## FORWARD-Chain  ## (everything that passes the firewall)
+####################
+
+
+##GENERAL Filtering
+
+  #Kill invalid packets (not ESTABLISHED, RELATED or NEW)
+  $IPTABLES -A FORWARD -m state --state INVALID -j LINVALID
+ 
+  # Check TCP-Packets for Bad Flags 
+  $IPTABLES -A FORWARD -p tcp -j CHECKBADFLAG
+
+
+##Filtering FROM INTERNAL NET
+  
+
+  ##Silent Drops/Rejects (Things we don't want in our logs)
+
+   #SMB
+   $IPTABLES -A FORWARD -o $EXTIF -j SMB
+
+  
+  ##Special Drops/Rejects
+   # - To be done -
+  
+  
+  ##Filter for some Trojans communicating to outside
+   # - To be done -
+
+  
+  ##Port-Forwarding from Ports < 1024 [outbound] (--> Also see chain PREROUTING)
+
+   #HTTP-Forwarding
+   #$IPTABLES -A FORWARD -o $EXTIF -s $HTTPIP -p tcp --sport 80 -j ACCEPT
+
+
+  ##Allow all other forwarding (from Ports > 1024) from Internal Net to External Net
+  $IPTABLES -A FORWARD -i $INTIF -o $EXTIF -s $INTLAN -p tcp --sport $UNPRIVPORTS -j ACCEPT
+  $IPTABLES -A FORWARD -i $INTIF -o $EXTIF -s $INTLAN -p udp --sport $UNPRIVPORTS -j ACCEPT
+  $IPTABLES -A FORWARD -i $INTIF -o $EXTIF -s $INTLAN -p icmp -j ACCEPT
+
+
+
+##Filtering FROM EXTERNAL NET
+ 
+ 
+  ##Silent Drops/Rejects (Things we don't want in our logs)
+  
+   #SMB
+   $IPTABLES -A FORWARD -i $EXTIF -j SMB
+ 
+  
+  ##Allow replies coming in
+  $IPTABLES -A FORWARD -i $EXTIF -m state --state ESTABLISHED -j ACCEPT
+  $IPTABLES -A FORWARD -i $EXTIF -p tcp --dport $UNPRIVPORTS -m state --state RELATED -j TCPACCEPT
+  $IPTABLES -A FORWARD -i $EXTIF -p udp --dport $UNPRIVPORTS -m state --state RELATED -j ACCEPT
+  $IPTABLES -A FORWARD -i $EXTIF -p icmp -m state --state RELATED -j ACCEPT
+  
+
+##Port-Forwarding [inbound] (--> Also see chain PREROUTING)
+
+  #HTTP-Forwarding
+  #$IPTABLES -A FORWARD -i $EXTIF -p tcp -d $HTTPIP --dport 80 -j ACCEPT
+
+  #Battlecom-Forwarding
+  #$IPTABLES -A FORWARD -p tcp --dport 2300:2400 -i $EXTIF -d $BATTLECOMIP -j ACCEPT
+  #$IPTABLES -A FORWARD -p udp --dport 2300:2400 -i $EXTIF -d $BATTLECOMIP -j ACCEPT
+  #$IPTABLES -A FORWARD -p tcp --dport 47624 -i $EXTIF -d $BATTLECOMIP -j ACCEPT
+
+
+
+##Catch all rule/Deny every other forwarding
+
+$IPTABLES -A FORWARD -j LDROP
+
+
+
+
+################
+## PREROUTING ##
+################
+
+##Port-Forwarding (--> Also see chain FORWARD)
+
+  ##HTTP
+  #$IPTABLES -A PREROUTING -t nat -i $EXTIF -p tcp -d $EXTIP --dport 80 -j DNAT --to $HTTPIP
+
+  ##Battlecom
+  #$IPTABLES -t nat -A PREROUTING -d $EXTIP -p tcp --destination-port 2300:2400 -i $EXTIF -j DNAT --to $BATTLECOMIP
+  #$IPTABLES -t nat -A PREROUTING -d $EXTIP -p udp --destination-port 2300:2400 -i $EXTIF -j DNAT --to $BATTLECOMIP
+  #$IPTABLES -t nat -A PREROUTING -d $EXTIP -p tcp --destination-port 47624 -i $EXTIF -j DNAT --to $BATTLECOMIP:47624
+
+
+
+###################
+##  POSTROUTING  ##
+###################
+
+  #Masquerade from Internal Net to External Net
+  $IPTABLES -A POSTROUTING -t nat -o $EXTIF -j MASQUERADE
+
+
+
+#------End Ruleset------#
+
+echo "...done"
+echo ""
+
+
+echo "--> IPTABLES firewall loaded/activated <--"
+
+
+##--------------------------------End Firewall---------------------------------##
+
+
+
+   ;;
+   *)
+      echo "Usage: firewall (start|stop|restart|status) EXTIF INTIF"
+      exit 1
+esac
+
+exit 0

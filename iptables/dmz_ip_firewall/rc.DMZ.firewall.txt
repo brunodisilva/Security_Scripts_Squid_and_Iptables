@@ -1,0 +1,291 @@
+#!/bin/sh
+#
+# rc.DMZ.firewall - DMZ IP Firewall script for Linux 2.4.x and iptables
+#
+# Copyright (C) 2001  Oskar Andreasson &lt;blueflux@koffein.net&gt;
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; version 2 of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program or from the site that you downloaded it
+# from; if not, write to the Free Software Foundation, Inc., 59 Temple
+# Place, Suite 330, Boston, MA  02111-1307   USA
+#
+
+###########
+# Configuration options, these will speed you up getting this script to
+# work with your own setup.
+
+#
+# your LAN's IP range and localhost IP. /24 means to only use the first 24 
+# bits of the 32 bit IP adress. the same as netmask 255.255.255.0
+#
+# STATIC_IP is used by me to allow myself to do anything to myself, might
+# be a security risc but sometimes I want this. If you don't have a static
+# IP, I suggest not using this option at all for now but it's stil
+# enabled per default and will add some really nifty security bugs for all
+# those who skips reading the documentation=)
+
+LAN_IP="192.168.0.2"
+LAN_BCAST_ADRESS="192.168.0.255"
+LAN_IFACE="eth1"
+
+INET_IP="194.236.50.152"
+INET_IFACE="eth0"
+
+HTTP_IP="194.236.50.153"
+DNS_IP="194.236.50.154"
+DMZ_HTTP_IP="192.168.1.2"
+DMZ_DNS_IP="192.168.1.3"
+DMZ_IP="192.168.1.1"
+DMZ_IFACE="eth2"
+
+LO_IP="127.0.0.1"
+LO_IFACE="lo"
+
+
+IPTABLES="/usr/local/sbin/iptables"
+
+###########################################
+#
+# Load all required IPTables modules
+#
+
+#
+# Needed to initially load modules
+#
+
+/sbin/depmod -a
+
+#
+# Adds some iptables targets like LOG, REJECT and MASQUARADE.
+#
+
+/sbin/modprobe ipt_LOG
+/sbin/modprobe ipt_MASQUERADE
+
+#
+# Support for connection tracking of FTP and IRC.
+#
+#/sbin/modprobe ip_conntrack_ftp
+#/sbin/modprobe ip_conntrack_irc
+
+
+#CRITICAL:  Enable IP forwarding since it is disabled by default.
+#
+
+echo "1" > /proc/sys/net/ipv4/ip_forward
+
+#
+# Dynamic IP users:
+#
+#echo "1" > /proc/sys/net/ipv4/ip_dynaddr
+
+###########################################
+#
+# Chain Policies gets set up before any bad packets gets through
+#
+
+$IPTABLES -P INPUT DROP
+$IPTABLES -P OUTPUT DROP
+$IPTABLES -P FORWARD DROP
+
+#
+# the allowed chain for TCP connections, utilized in the FORWARD chain
+#
+
+$IPTABLES -N allowed
+$IPTABLES -A allowed -p TCP --syn -j ACCEPT
+$IPTABLES -A allowed -p TCP -m state --state ESTABLISHED,RELATED -j ACCEPT
+$IPTABLES -A allowed -p TCP -j DROP
+
+#
+# ICMP rules, utilized in the FORWARD chain
+#
+
+
+$IPTABLES -N icmp_packets
+
+# Changed rules totally
+$IPTABLES -A icmp_packets -p ICMP -s 0/0 --icmp-type 8 -j ACCEPT
+$IPTABLES -A icmp_packets -p ICMP -s 0/0 --icmp-type 11 -j ACCEPT
+
+#
+# bad_tcp_packets chain
+#
+# Take care of bad TCP packets that we don't want.
+#
+
+$IPTABLES -N bad_tcp_packets
+$IPTABLES -A bad_tcp_packets -p tcp ! --syn -m state --state NEW -j LOG \
+--log-prefix "New not syn:"
+$IPTABLES -A bad_tcp_packets -p tcp ! --syn -m state --state NEW -j DROP
+
+#
+# Do some checks for obviously spoofed IP's
+#
+
+$IPTABLES -A bad_tcp_packets -i $INET_IFACE -s 192.168.0.0/16 -j DROP
+$IPTABLES -A bad_tcp_packets -i $INET_IFACE -s 10.0.0.0/8 -j DROP
+$IPTABLES -A bad_tcp_packets -i $INET_IFACE -s 172.16.0.0/12 -j DROP
+
+###########################################
+# POSTROUTING chain in the nat table
+#
+# Enable IP SNAT for all internal networks trying to get out on the Internet
+#
+
+$IPTABLES -t nat -A POSTROUTING -o $INET_IFACE -j SNAT --to-source $INET_IP
+
+
+
+###########################################
+# PREROUTING chain in the nat table
+#
+# Enable IP Destination NAT for DMZ zone
+#
+
+$IPTABLES -t nat -A PREROUTING -p TCP -i $INET_IFACE -d $HTTP_IP --dport 80 \
+-j DNAT --to-destination $DMZ_HTTP_IP
+$IPTABLES -t nat -A PREROUTING -p TCP -i $INET_IFACE -d $DNS_IP --dport 53 \
+-j DNAT --to-destination $DMZ_DNS_IP
+$IPTABLES -t nat -A PREROUTING -p UDP -i $INET_IFACE -d $DNS_IP --dport 53 \
+-j DNAT --to-destination $DMZ_DNS_IP
+
+###########################################
+#
+# FORWARD chain
+#
+#
+# Bad TCP packets we don't want
+#
+
+$IPTABLES -A FORWARD -p tcp -j bad_tcp_packets
+
+
+#
+# DMZ section
+#
+# General rules
+#
+
+$IPTABLES -A FORWARD -i $DMZ_IFACE -o $INET_IFACE -j ACCEPT
+$IPTABLES -A FORWARD -i $INET_IFACE -o $DMZ_IFACE -m state \
+--state ESTABLISHED,RELATED -j ACCEPT
+$IPTABLES -A FORWARD -i $LAN_IFACE -o $DMZ_IFACE -j ACCEPT
+$IPTABLES -A FORWARD -i $DMZ_IFACE -o $LAN_IFACE -j ACCEPT
+
+#
+# HTTP server
+#
+
+$IPTABLES -A FORWARD -p TCP -i $INET_IFACE -o $DMZ_IFACE -d $DMZ_HTTP_IP \
+--dport 80 -j allowed
+$IPTABLES -A FORWARD -p ICMP -i $INET_IFACE -o $DMZ_IFACE -d $DMZ_HTTP_IP \
+-j icmp_packets
+
+#
+# DNS server
+#
+
+$IPTABLES -A FORWARD -p TCP -i $INET_IFACE -o $DMZ_IFACE -d $DMZ_DNS_IP \
+--dport 53 -j allowed
+$IPTABLES -A FORWARD -p UDP -i $INET_IFACE -o $DMZ_IFACE -d $DMZ_DNS_IP \
+--dport 53 -j ACCEPT
+$IPTABLES -A FORWARD -p ICMP -i $INET_IFACE -o $DMZ_IFACE -d $DMZ_DNS_IP \
+-j icmp_packets
+
+#
+# LAN section
+#
+
+$IPTABLES -A FORWARD -i $LAN_IFACE -j ACCEPT
+$IPTABLES -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 
+
+#
+# LOG all packets reaching here
+#
+
+$IPTABLES -A FORWARD -m limit --limit 3/minute --limit-burst 3 -j LOG \
+--log-level DEBUG --log-prefix "IPT FORWARD packet died: "
+
+
+###########################################################
+#
+# Firewall rules
+# Rules applying to the firewall box
+#
+#
+# INPUT chain
+#
+# Bad TCP packets we don't want
+#
+
+$IPTABLES -A INPUT -p tcp -j bad_tcp_packets
+
+#
+# Packets from the Internet to this box
+#
+
+$IPTABLES -A INPUT -p ICMP -i $INET_IFACE -j icmp_packets
+
+#
+# Packets from LAN, DMZ or LOCALHOST
+#
+
+# From DMZ Interface to DMZ firewall IP
+$IPTABLES -A INPUT -p ALL -i $DMZ_IFACE -d $DMZ_IP -j ACCEPT
+
+# From LAN Interface to LAN firewall IP
+$IPTABLES -A INPUT -p ALL -i $LAN_IFACE -d $LAN_IP -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $LAN_IFACE -d $LAN_BCAST_ADRESS -j ACCEPT
+
+# From Localhost interface to Localhost IP
+$IPTABLES -A INPUT -p ALL -i $LO_IFACE -s $LO_IP -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $LO_IFACE -s $LAN_IP -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $LO_IFACE -s $INET_IP -j ACCEPT
+
+# All established and related packets incoming from the internet to the 
+# firewall
+$IPTABLES -A INPUT -p ALL -d $INET_IP -m state --state ESTABLISHED,RELATED \
+-j ACCEPT
+
+# Logging rule
+$IPTABLES -A INPUT -m limit --limit 3/minute --limit-burst 3 \
+-j LOG --log-level DEBUG --log-prefix "IPT INPUT packet died: "
+
+###########################################################
+#
+# OUTPUT chain
+#
+#
+# Bad TCP packets we don't want
+#
+
+$IPTABLES -A OUTPUT -p tcp -j bad_tcp_packets
+
+#
+# Allow ourself to send packets not spoofed everywhere
+#
+
+$IPTABLES -A OUTPUT -p ALL -o $LO_IFACE -s $LO_IP -j ACCEPT
+$IPTABLES -A OUTPUT -p ALL -o $LAN_IFACE -s $LAN_IP -j ACCEPT
+$IPTABLES -A OUTPUT -p ALL -o $INET_IFACE -s $INET_IP -j ACCEPT
+
+#
+# Logging rule 
+#
+
+$IPTABLES -A OUTPUT -m limit --limit 3/minute --limit-burst 3 -j LOG \
+--log-level DEBUG --log-prefix "IPT OUTPUT packet died: "
+
+
+
+

@@ -1,0 +1,214 @@
+#!/bin/sh
+#
+# http://www.Sentry.net/~obsid/IPTables/rc.scripts.dir/current/SENTRY/rc.firewall.nat
+#
+## File: rc.firewall.nat
+## Set up iptables NAT rules.
+
+IPTABLES="/usr/local/sbin/iptables"
+EXTERNAL1="eth0"
+EXTERNAL2="eth0"
+INTERNAL="eth1"
+DMZ_IF="eth2"
+
+EXT_IP1="216.162.197.10/32"
+EXT_IP2="216.162.197.11/32"
+
+$IPTABLES -F -t nat
+$IPTABLES -t nat -X
+
+#####################################################################################
+## Sentry.net EXTERNAL DNAT
+
+	$IPTABLES -t nat -N SENTRY_DNAT
+	$IPTABLES -t nat -F SENTRY_DNAT
+
+   ##-----------------------------------------------------------------------------##
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 20 -j DNAT --to-destination 192.168.2.69:20
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 21 -j DNAT --to-destination 192.168.2.69:21
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 22 -j DNAT --to-destination 192.168.2.69:22
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 23 -j DNAT --to-destination 192.168.2.69:23
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 25 -j DNAT --to-destination 192.168.2.69:25
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 80 -j DNAT --to-destination 192.168.2.69:80
+	$IPTABLES -t nat -A SENTRY_DNAT -i $EXTERNAL1 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP1 --dport 110 -j DNAT --to-destination 192.168.2.69:110
+   ##-----------------------------------------------------------------------------##
+
+
+#####################################################################################
+## Obsidian.net/org EXTERNAL DNAT
+
+	$IPTABLES -t nat -N OBS_DNAT
+	$IPTABLES -t nat -F OBS_DNAT
+
+   ##-----------------------------------------------------------------------------##
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 20 -j DNAT --to-destination 192.168.2.42:20
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 21 -j DNAT --to-destination 192.168.2.42:21
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 22 -j DNAT --to-destination 192.168.2.42:22
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 23 -j DNAT --to-destination 192.168.2.42:23
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 25 -j DNAT --to-destination 192.168.2.42:25
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 80 -j DNAT --to-destination 192.168.2.42:80
+	$IPTABLES -t nat -A OBS_DNAT -i $EXTERNAL2 -p tcp -s ! 192.168.0.0/16 \
+		-d $EXT_IP2 --dport 110 -j DNAT --to-destination 192.168.2.42:110
+   ##-----------------------------------------------------------------------------##
+
+
+####################################################################################
+## Sentry.net INTERNAL DNAT
+
+	$IPTABLES -t nat -N SENTRY_DNAT_INT
+	$IPTABLES -t nat -F SENTRY_DNAT_INT
+
+   ##-----------------------------------------------------------------------------##
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 20 -j DNAT --to-destination 192.168.2.69:20
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 21 -j DNAT --to-destination 192.168.2.69:21
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 22 -j DNAT --to-destination 192.168.2.69:22
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 23 -j DNAT --to-destination 192.168.2.69:23
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 25 -j DNAT --to-destination 192.168.2.69:25
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 80 -j DNAT --to-destination 192.168.2.69:80
+	$IPTABLES -t nat -A SENTRY_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 --dport 110 -j DNAT --to-destination 192.168.2.69:110
+   ##-----------------------------------------------------------------------------##
+
+
+#####################################################################################
+## Obsidian.net/org INTERNAL DNAT
+
+	$IPTABLES -t nat -N OBS_DNAT_INT
+	$IPTABLES -t nat -F OBS_DNAT_INT
+
+   ##-----------------------------------------------------------------------------##
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 20 -j DNAT --to-destination 192.168.2.42:20
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 21 -j DNAT --to-destination 192.168.2.42:21
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 22 -j DNAT --to-destination 192.168.2.42:22
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 23 -j DNAT --to-destination 192.168.2.42:23
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 25 -j DNAT --to-destination 192.168.2.42:25
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 80 -j DNAT --to-destination 192.168.2.42:80
+	$IPTABLES -t nat -A OBS_DNAT_INT -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 --dport 110 -j DNAT --to-destination 192.168.2.42:110
+   ##-----------------------------------------------------------------------------##
+
+#####################################################################################
+## DMZ_DNAT for Sentry.net
+
+	$IPTABLES -t nat -N SENTRY_DMZ_DNAT
+	$IPTABLES -t nat -F SENTRY_DMZ_DNAT
+
+   ##-----------------------------------------------------------------------------##
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 20 -j DNAT --to-destination 192.168.2.69:20
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 21 -j DNAT --to-destination 192.168.2.69:21
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 22 -j DNAT --to-destination 192.168.2.69:22
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 23 -j DNAT --to-destination 192.168.2.69:23
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 25 -j DNAT --to-destination 192.168.2.69:25
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 80 -j DNAT --to-destination 192.168.2.69:80
+	$IPTABLES -t nat -A SENTRY_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP1 \
+		-p tcp --dport 110 -j DNAT --to-destination 192.168.2.69:110
+   ##-----------------------------------------------------------------------------##
+
+
+#####################################################################################
+## DMZ_DNAT for Obsidian.net
+
+	$IPTABLES -t nat -N OBS_DMZ_DNAT
+	$IPTABLES -t nat -F OBS_DMZ_DNAT
+
+   ##-----------------------------------------------------------------------------##
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP2 \
+		-p tcp --dport 20 -j DNAT --to-destination 192.168.2.42:20
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP2 \
+		-p tcp --dport 21 -j DNAT --to-destination 192.168.2.42:21
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.69/32 -d $EXT_IP2 \
+		-p tcp --dport 22 -j DNAT --to-destination 192.168.2.42:22
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP2 \
+		-p tcp --dport 23 -j DNAT --to-destination 192.168.2.42:23
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP2 \
+		-p tcp --dport 25 -j DNAT --to-destination 192.168.2.42:25
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP2 \
+		-p tcp --dport 80 -j DNAT --to-destination 192.168.2.42:80
+	$IPTABLES -t nat -A OBS_DMZ_DNAT -i $DMZ_IF -s 192.168.2.0/24 -d $EXT_IP2 \
+		-p tcp --dport 110 -j DNAT --to-destination 192.168.2.42:110
+   ##-----------------------------------------------------------------------------##
+
+
+#####################################################################################
+## DNAT -- MAIN
+
+	$IPTABLES -t nat -A PREROUTING -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP1 -j SENTRY_DNAT_INT
+	$IPTABLES -t nat -A PREROUTING -i $INTERNAL -p tcp -s 192.168.1.0/24 \
+		-d $EXT_IP2 -j OBS_DNAT_INT
+
+	$IPTABLES -t nat -A PREROUTING -i $EXTERNAL1 -p tcp -s ! 192.168.1.0/24 \
+		-d $EXT_IP1 -j SENTRY_DNAT
+	$IPTABLES -t nat -A PREROUTING -i $EXTERNAL2 -p tcp -s ! 192.168.1.0/24 \
+		-d $EXT_IP2 -j OBS_DNAT
+
+	$IPTABLES -t nat -A PREROUTING -i $DMZ_IF -p tcp -s 192.168.2.42/32 \
+		-d $EXT_IP1 -j SENTRY_DMZ_DNAT
+	$IPTABLES -t nat -A PREROUTING -i $DMZ_IF -p tcp -s 192.168.2.69/32 \
+		-d $EXT_IP1 -j SENTRY_DMZ_DNAT
+
+	$IPTABLES -t nat -A PREROUTING -i $DMZ_IF -p tcp -s 192.168.2.42/32 \
+		-d $EXT_IP2 -j OBS_DMZ_DNAT
+	$IPTABLES -t nat -A PREROUTING -i $DMZ_IF -p tcp -s 192.168.2.69/32 \
+		-d $EXT_IP2 -j OBS_DMZ_DNAT
+
+
+####################################################################################
+## SNAT -- Source Network Address Translation ##
+
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.1.0/24 -d ! 192.168.0.0/16 \
+		-o $EXTERNAL1 -j SNAT --to-source 216.162.197.10
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.2.69/32 -d ! 192.168.0.0/16 \
+		-o $EXTERNAL1 -j SNAT --to-source 216.162.197.10
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.2.42/32 -d ! 192.168.0.0/16 \
+		-o $EXTERNAL2 -j SNAT --to-source 216.162.197.11
+
+
+   ##-----------------------------------------------------------------------------##
+   ## SNAT DMZ to DMZ connections.
+
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.2.69/32 -d 192.168.2.69/32 \
+		-o $DMZ_IF -p tcp -j SNAT --to-source 192.168.2.10
+
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.2.42/32 -d 192.168.2.42/32 \
+		-o $DMZ_IF -p tcp -j SNAT --to-source 192.168.2.10
+
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.2.42/32 -d 192.168.2.69/32 \
+		-o $DMZ_IF -p tcp -j SNAT --to-source 192.168.2.10
+
+	$IPTABLES -t nat -A POSTROUTING -s 192.168.2.69/32 -d 192.168.2.42/32 \
+		-o $DMZ_IF -p tcp -j SNAT --to-source 192.168.2.10
+   ##-----------------------------------------------------------------------------##
+
+

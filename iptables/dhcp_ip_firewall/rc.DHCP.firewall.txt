@@ -1,0 +1,292 @@
+#!/bin/sh
+#
+# rc.firewall - DHCP IP Firewall script for Linux 2.4.x and iptables
+#
+# Copyright (C) 2001  Oskar Andreasson &lt;blueflux@koffein.net&gt;
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; version 2 of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program or from the site that you downloaded it
+# from; if not, write to the Free Software Foundation, Inc., 59 Temple
+# Place, Suite 330, Boston, MA  02111-1307   USA
+#
+
+###########################################################################
+#
+# 1. Configuration options - use these to quicken up the set up.
+#
+
+###########################################################################
+#
+# Local Area Network configuration.
+#
+# your LAN's IP range and localhost IP. /24 means to only use the first 24 
+# bits of the 32 bit IP adress. the same as netmask 255.255.255.0
+#
+
+LAN_IP="192.168.0.2"
+LAN_IP_RANGE="192.168.0.0/16"
+LAN_BCAST_ADRESS="192.168.0.255"
+LAN_IFACE="eth1"
+
+###########################################################################
+#
+# Localhost configuration.
+#
+# Localhost Interface and IP. Should not need any changes.
+#
+
+LO_IFACE="lo"
+LO_IP="127.0.0.1"
+
+###########################################################################
+#
+# Internet configuration.
+#
+# All information pertaining to the Internet and the Internet connection.
+#
+
+INET_IFACE="eth0"
+
+###########################################################################
+#
+# DHCP Configuration.
+#
+# Information pertaining to DHCP over the Internet, if needed. 
+#
+# Set DHCP variable to No if you don't get IP from DHCP. If you get DHCP
+# over the Internet set this variable to Yes, and set up the proper IP
+# adress for the DHCP server in the DHCP_SERVER variable.
+#
+
+DHCP="No"
+DHCP_SERVER="195.22.90.65"
+
+###########################################################################
+#
+# PPPOE Configuration.
+#
+# Configuration options pertaining to PPPoE.
+#
+# If you have problem with your PPPoE connection, such as large mails not
+# getting through while small mail get through properly etc, you may set
+# this option to "yes" which may fix the problem. This option will set a
+# rule in the PREROUTING chain of the mangle table which will clamp
+# (resize) all routed packets to PMTU (Path Maximum Transmit Unit). 
+#
+# Note that it is better to set this up in the PPPoE package itself, since
+# the PPPoE configuration option will give less overhead.
+#
+
+PPPOE_PMTU="No"
+
+###########################################################################
+#
+# IPTABLES configuration.
+#
+# Options pertaining to iptables such as searchpath, etc.
+#
+
+IPTABLES="/usr/sbin/iptables"
+
+###########################################################################
+#
+# 2. Module loading.
+#
+
+#
+# Needed to initially load modules
+#
+/sbin/depmod -a
+
+#
+# Adds some iptables targets like LOG, REJECT and MASQUARADE.
+#
+/sbin/modprobe ipt_LOG
+#/sbin/modprobe ipt_REJECT
+/sbin/modprobe ipt_MASQUERADE
+
+#
+# Support for owner matching
+#
+#/sbin/modprobe ipt_owner
+
+#
+# Support for connection tracking of FTP and IRC.
+#
+#/sbin/modprobe ip_conntrack_ftp
+#/sbin/modprobe ip_conntrack_irc
+
+###########################################################################
+#
+# 3. /proc set up.
+#
+# Enable ip_forward if you have two or more networks, including the
+# Internet, that needs forwarding of packets through this box. This is
+# critical since it is turned off as default in Linux.
+#
+
+echo "1" > /proc/sys/net/ipv4/ip_forward
+
+#
+# Dynamic IP users:
+#
+#echo "1" > /proc/sys/net/ipv4/ip_dynaddr
+
+###########################################################################
+#
+# 4. IPTables rules set up.
+#
+# Set default policies for the INPUT, FORWARD and OUTPUT chains
+#
+
+$IPTABLES -P INPUT DROP
+$IPTABLES -P OUTPUT DROP
+$IPTABLES -P FORWARD DROP
+
+#
+# bad_tcp_packets chain
+#
+# Take care of bad TCP packets that we don't want.
+#
+
+$IPTABLES -N bad_tcp_packets
+$IPTABLES -A bad_tcp_packets -p tcp ! --syn -m state --state NEW -j LOG \
+--log-prefix "New not syn:"
+$IPTABLES -A bad_tcp_packets -p tcp ! --syn -m state --state NEW -j DROP
+
+#
+# Do some checks for obviously spoofed IP's
+#
+
+$IPTABLES -A bad_tcp_packets -i $INET_IFACE -s 192.168.0.0/16 -j DROP
+$IPTABLES -A bad_tcp_packets -i $INET_IFACE -s 10.0.0.0/8 -j DROP
+$IPTABLES -A bad_tcp_packets -i $INET_IFACE -s 172.16.0.0/12 -j DROP
+
+#
+# Create separate chains for ICMP, TCP and UDP to traverse
+#
+
+$IPTABLES -N icmp_packets
+$IPTABLES -N tcp_packets
+$IPTABLES -N udpincoming_packets
+
+#
+# The allowed chain for TCP connections
+#
+
+$IPTABLES -N allowed
+$IPTABLES -A allowed -p TCP --syn -j ACCEPT
+$IPTABLES -A allowed -p TCP -m state --state ESTABLISHED,RELATED -j ACCEPT
+$IPTABLES -A allowed -p TCP -j DROP
+
+#
+# ICMP rules
+#
+
+# Changed rules totally
+$IPTABLES -A icmp_packets -p ICMP -s 0/0 --icmp-type 8 -j ACCEPT
+$IPTABLES -A icmp_packets -p ICMP -s 0/0 --icmp-type 11 -j ACCEPT
+
+#
+# TCP rules
+#
+
+$IPTABLES -A tcp_packets -p TCP -s 0/0 --dport 21 -j allowed
+$IPTABLES -A tcp_packets -p TCP -s 0/0 --dport 22 -j allowed
+$IPTABLES -A tcp_packets -p TCP -s 0/0 --dport 80 -j allowed
+$IPTABLES -A tcp_packets -p TCP -s 0/0 --dport 113 -j allowed
+
+#
+# UDP ports
+#
+
+$IPTABLES -A udpincoming_packets -p UDP -s 0/0 --source-port 53 -j ACCEPT
+if [ $DHCP -eq "yes" ] ; then
+	$IPTABLES -A udpincoming_packets -p UDP -s $DHCP_SERVER --sport 67 \
+	--dport 68 -j ACCEPT
+fi
+$IPTABLES -A udpincoming_packets -p UDP -s 0/0 --source-port 123 -j ACCEPT
+$IPTABLES -A udpincoming_packets -p UDP -s 0/0 --source-port 2074 -j ACCEPT
+$IPTABLES -A udpincoming_packets -p UDP -s 0/0 --source-port 4000 -j ACCEPT
+
+#
+# POSTROUTING chain in the nat table
+#
+
+if [ $PPPOE_PMTU -eq "yes" ] ; then
+	$IPTABLES -t nat -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN \
+	-j TCPMSS --clamp-mss-to-pmtu
+fi
+$IPTABLES -t nat -A POSTROUTING -o $INET_IFACE -j MASQUERADE
+
+#
+# Bad TCP packets we don't want
+#
+
+$IPTABLES -A FORWARD -p tcp -j bad_tcp_packets
+
+#
+# Accept the packets we actually want to forward
+#
+
+$IPTABLES -A FORWARD -i $LAN_IFACE -j ACCEPT
+$IPTABLES -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 
+$IPTABLES -A FORWARD -m limit --limit 3/minute --limit-burst 3 \
+-j LOG --log-level DEBUG --log-prefix "IPT FORWARD packet died: "
+
+#
+# INPUT chain
+#
+# Bad TCP packets we don't want
+#
+
+$IPTABLES -A INPUT -p tcp -j bad_tcp_packets
+
+
+#
+# Rules for incoming packets from the internet
+#
+
+$IPTABLES -A INPUT -p ICMP -i $INET_IFACE -j icmp_packets
+$IPTABLES -A INPUT -p TCP -i $INET_IFACE -j tcp_packets
+$IPTABLES -A INPUT -p UDP -i $INET_IFACE -j udpincoming_packets
+
+#
+# Rules for special networks not part of the Internet
+#
+
+$IPTABLES -A INPUT -p ALL -i $LO_IFACE -d $LO_IP -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $LO_IFACE -s $LAN_IP -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $LO_IFACE -s $INET_IP -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $LAN_IFACE -s $LAN_IP_RANGE -j ACCEPT
+$IPTABLES -A INPUT -p ALL -i $INET_IFACE -m state \
+--state ESTABLISHED,RELATED -j ACCEPT
+$IPTABLES -A INPUT -m limit --limit 3/minute --limit-burst 3 \
+-j LOG --log-level DEBUG --log-prefix "IPT INPUT packet died: "
+
+#
+# OUTPUT chain
+#
+# Bad TCP packets we don't want
+#
+
+$IPTABLES -A OUTPUT -p tcp -j bad_tcp_packets
+
+
+$IPTABLES -A OUTPUT -p ALL -s $LO_IP -j ACCEPT
+$IPTABLES -A OUTPUT -p ALL -o $LAN_IFACE -j ACCEPT
+$IPTABLES -A OUTPUT -p ALL -o $INET_IFACE -j ACCEPT
+$IPTABLES -A OUTPUT -m limit --limit 3/minute --limit-burst 3 \
+-j LOG --log-level DEBUG --log-prefix "IPT OUTPUT packet died: "
+
+
+
