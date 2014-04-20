@@ -1,13 +1,11 @@
 Security_Scripts_Squid_and_Iptables
 ===================================
 
-Collection of Scripts
+Collection of Scripts IPTABELS and SQUID
 
-BBBB     DDD      SSS  
-B   B    D  D    S     
-BBBB     D  D     SSS  
-B   B .. D  D ..     S 
-BBBB  .. DDD  .. SSSS  
+![alt tag](http://upload.wikimedia.org/wikipedia/commons/a/af/Tux.png)
+
+
 
 Coleção de scripts de segurança 
 alguns podem estar desatualizados mas quero
@@ -27,15 +25,4 @@ I hope you enjoy! =D
 
 
 
-                                                                 #####
-                                                                #######
-                   #                                            ##O#O##
-  ######          ###                                           #VVVVV#
-    ##             #                                          ##  VVV  ##
-    ##         ###    ### ####   ###    ###  ##### #####     #          ##
-    ##        #  ##    ###    ##  ##     ##    ##   ##      #            ##
-    ##       #   ##    ##     ##  ##     ##      ###        #            ###
-    ##          ###    ##     ##  ##     ##      ###       QQ#           ##Q
-    ##       # ###     ##     ##  ##     ##     ## ##    QQQQQQ#       #QQQQQQ
-    ##      ## ### #   ##     ##  ###   ###    ##   ##   QQQQQQQ#     #QQQQQQQ
-  ############  ###   ####   ####   #### ### ##### #####   QQQQQ#######QQQQQ
+ 
